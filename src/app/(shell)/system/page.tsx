@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
@@ -274,10 +274,28 @@ function CORSTab() {
   const [enabled, setEnabled] = useState(false);
   const [origins, setOrigins] = useState('');
   const [headers, setHeaders] = useState('');
+  const [seeded, setSeeded] = useState(false);
 
-  const data = corsQuery.data;
+  useEffect(() => {
+    if (corsQuery.data && !seeded) {
+      setEnabled(corsQuery.data.enabled ?? false);
+      setOrigins(corsQuery.data.allowed_origins?.join('\n') ?? '');
+      setHeaders(corsQuery.data.allowed_headers?.join('\n') ?? '');
+      setSeeded(true);
+    }
+  }, [corsQuery.data, seeded]);
+
   const saveMutation = useMutation({
-    mutationFn: () => vaultFetch('/sys/config/cors', { method: 'POST', body: { enabled, allowed_origins: origins.split('\n').filter(Boolean), allowed_headers: headers.split('\n').filter(Boolean) } }),
+    mutationFn: () => {
+      const parsedOrigins = origins.split('\n').map(s => s.trim()).filter(Boolean);
+      if (enabled && parsedOrigins.length === 0) {
+        throw new Error('At least one allowed origin (or *) must be provided when CORS is enabled.');
+      }
+      return vaultFetch('/sys/config/cors', {
+        method: 'POST',
+        body: { enabled, allowed_origins: parsedOrigins, allowed_headers: headers.split('\n').map(s => s.trim()).filter(Boolean) },
+      });
+    },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['sys', 'cors'] }); toast.success('CORS config saved'); },
     onError: (e) => toast.error((e as Error).message),
   });
@@ -287,13 +305,18 @@ function CORSTab() {
       {corsQuery.isLoading ? <Skeleton className="h-40 w-full" /> : (
         <Card><CardContent className="pt-6 space-y-4">
           <div className="flex items-center gap-3">
-            <Switch checked={data?.enabled ?? enabled} onCheckedChange={setEnabled} />
+            <Switch checked={enabled} onCheckedChange={setEnabled} />
             <Label>Enable CORS</Label>
           </div>
-          <div className="space-y-1.5"><Label>Allowed Origins (one per line)</Label>
-            <Textarea rows={4} defaultValue={data?.allowed_origins?.join('\n')} onChange={(e) => setOrigins(e.target.value)} placeholder="https://example.com" /></div>
-          <div className="space-y-1.5"><Label>Allowed Headers (one per line)</Label>
-            <Textarea rows={3} defaultValue={data?.allowed_headers?.join('\n')} onChange={(e) => setHeaders(e.target.value)} /></div>
+          <div className="space-y-1.5">
+            <Label>Allowed Origins (one per line)</Label>
+            <Textarea rows={4} value={origins} onChange={(e) => setOrigins(e.target.value)} placeholder={'https://example.com\n*'} />
+            <p className="text-xs text-muted-foreground">Use <code className="font-mono">*</code> to allow all origins.</p>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Allowed Headers (one per line)</Label>
+            <Textarea rows={3} value={headers} onChange={(e) => setHeaders(e.target.value)} placeholder="X-Custom-Header" />
+          </div>
           <div className="flex justify-end"><Button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending}>Save</Button></div>
         </CardContent></Card>
       )}

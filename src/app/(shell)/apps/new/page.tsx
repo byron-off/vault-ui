@@ -41,12 +41,24 @@ const HCLEditor = dynamic(() => import('@/components/hcl-editor').then(m => m.HC
 
 const STEPS = ['Basics', 'Secrets', 'Policy', 'AppRole Config', 'Review', 'Execution', 'Success'];
 
+const CATEGORY_PRESETS = ['web', 'api', 'scripts', 'worker', 'batch', 'infra'] as const;
+
 const basicsSchema = z.object({
   app_name: z
     .string()
     .min(2, 'Minimum 2 characters')
     .max(63, 'Maximum 63 characters')
     .regex(/^[a-z][a-z0-9-]{1,62}$/, 'Lowercase letters, numbers, hyphens only. Must start with a letter.'),
+  project_name: z
+    .string()
+    .min(2, 'Minimum 2 characters')
+    .max(63, 'Maximum 63 characters')
+    .regex(/^[a-z][a-z0-9-]*$/, 'Lowercase letters, numbers, hyphens only.'),
+  category: z
+    .string()
+    .min(1, 'Required')
+    .max(63, 'Maximum 63 characters')
+    .regex(/^[a-z][a-z0-9-]*$/, 'Lowercase letters, numbers, hyphens only.'),
   description: z.string().max(200, 'Max 200 characters').optional(),
   env: z.enum(['prod', 'staging', 'dev']),
 });
@@ -62,20 +74,20 @@ type Operation = {
   error?: string;
 };
 
-function deriveNames(appName: string, env: string) {
+function deriveNames(appName: string, projectName: string, category: string, env: string) {
   return {
-    kvPath: `app/${env}/${appName}/`,
-    policyName: `${appName}-${env}-policy`,
-    approleName: `${appName}-${env}-role`,
+    kvPath: `app/${projectName}/${category}/${appName}/${env}/`,
+    policyName: `${projectName}-${appName}-${env}-policy`,
+    approleName: `${projectName}-${appName}-${env}-role`,
   };
 }
 
-function defaultPolicy(env: string, appName: string) {
-  return `path "secret/data/app/${env}/${appName}/*" {
+function defaultPolicy(projectName: string, category: string, appName: string, env: string) {
+  return `path "secret/data/app/${projectName}/${category}/${appName}/${env}/*" {
   capabilities = ["read"]
 }
 
-path "secret/metadata/app/${env}/${appName}/*" {
+path "secret/metadata/app/${projectName}/${category}/${appName}/${env}/*" {
   capabilities = ["list", "read"]
 }
 `;
@@ -160,12 +172,13 @@ export default function NewAppPage() {
   // Step 1 form
   const basicsForm = useForm<BasicsForm>({
     resolver: zodResolver(basicsSchema),
-    defaultValues: { app_name: '', description: '', env: 'dev' },
+    defaultValues: { app_name: '', project_name: '', category: '', description: '', env: 'dev' },
   });
   const basicsValues = basicsForm.watch();
-  const { kvPath, policyName, approleName } = basicsValues.app_name
-    ? deriveNames(basicsValues.app_name, basicsValues.env)
-    : { kvPath: '', policyName: '', approleName: '' };
+  const { kvPath, policyName, approleName } =
+    basicsValues.app_name && basicsValues.project_name && basicsValues.category
+      ? deriveNames(basicsValues.app_name, basicsValues.project_name, basicsValues.category, basicsValues.env)
+      : { kvPath: '', policyName: '', approleName: '' };
 
   // Step 2
   const [kvRows, setKvRows] = useState<KVRow[]>([]);
@@ -206,7 +219,7 @@ export default function NewAppPage() {
   const goToStep = (n: number) => setStep(n);
 
   const handleBasicsNext = basicsForm.handleSubmit(() => {
-    setPolicyHcl(defaultPolicy(basicsValues.env, basicsValues.app_name));
+    setPolicyHcl(defaultPolicy(basicsValues.project_name, basicsValues.category, basicsValues.app_name, basicsValues.env));
     setStep(1);
   });
 
@@ -287,6 +300,8 @@ export default function NewAppPage() {
       // 6. Store metadata
       const application: Application = {
         app_name: app.app_name,
+        project_name: app.project_name,
+        category: app.category,
         description: app.description || '',
         env: app.env,
         kv_path: kvPath,
@@ -354,6 +369,58 @@ export default function NewAppPage() {
               </div>
 
               <div className="space-y-1.5">
+                <Label htmlFor="project_name">
+                  Project Name <span className="text-destructive">*</span>
+                </Label>
+                <Input
+                  id="project_name"
+                  placeholder="my-project"
+                  {...basicsForm.register('project_name')}
+                  className="font-mono"
+                />
+                {basicsForm.formState.errors.project_name && (
+                  <p className="text-xs text-destructive">
+                    {basicsForm.formState.errors.project_name.message}
+                  </p>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  Groups related apps (e.g. <code className="font-mono">payments</code>, <code className="font-mono">platform</code>)
+                </p>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>
+                  Category <span className="text-destructive">*</span>
+                </Label>
+                <div className="flex flex-wrap gap-2">
+                  {CATEGORY_PRESETS.map((cat) => (
+                    <button
+                      key={cat}
+                      type="button"
+                      onClick={() => basicsForm.setValue('category', cat, { shouldValidate: true })}
+                      className={`px-3 py-1.5 text-sm rounded-md border transition-colors ${
+                        basicsValues.category === cat
+                          ? 'border-primary bg-primary/5 text-primary font-medium'
+                          : 'border-border hover:border-muted-foreground text-muted-foreground'
+                      }`}
+                    >
+                      {cat}
+                    </button>
+                  ))}
+                </div>
+                <Input
+                  placeholder="or type a custom category"
+                  {...basicsForm.register('category')}
+                  className="font-mono"
+                />
+                {basicsForm.formState.errors.category && (
+                  <p className="text-xs text-destructive">
+                    {basicsForm.formState.errors.category.message}
+                  </p>
+                )}
+              </div>
+
+              <div className="space-y-1.5">
                 <Label htmlFor="description">Description</Label>
                 <Input
                   id="description"
@@ -386,7 +453,7 @@ export default function NewAppPage() {
                 </div>
               </div>
 
-              {basicsValues.app_name && (
+              {basicsValues.app_name && basicsValues.project_name && basicsValues.category && (
                 <div className="rounded-md bg-muted p-4 space-y-2">
                   <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
                     Auto-derived
