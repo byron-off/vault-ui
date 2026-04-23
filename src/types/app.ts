@@ -1,5 +1,7 @@
 export type Application = {
   app_name: string;
+  project_name?: string;
+  category?: string;
   description: string;
   env: 'prod' | 'staging' | 'dev';
   kv_path: string;

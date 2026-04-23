@@ -245,6 +245,8 @@ export default function AppDetailPage() {
               <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
                 {[
                   ['App Name', app.app_name],
+                  ...(app.project_name ? [['Project', app.project_name]] : []),
+                  ...(app.category ? [['Category', app.category]] : []),
                   ['Environment', app.env],
                   ['KV Path', app.kv_path],
                   ['Policy', app.policy_name],
