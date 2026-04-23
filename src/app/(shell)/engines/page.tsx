@@ -542,7 +542,7 @@ export default function EnginesPage() {
                   ))
                 : mountList.length === 0
                   ? (
-                    <TableRow>
+                    <TableRow key="empty">
                       <TableCell colSpan={5}>
                         <div className="py-16 flex flex-col items-center justify-center gap-4 text-muted-foreground">
                           <Database className="h-12 w-12 opacity-25" />
