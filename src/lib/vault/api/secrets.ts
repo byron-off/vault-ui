@@ -1,12 +1,18 @@
 import { vaultFetch } from '../client';
+import { VaultError } from '../errors';
 import type { KVSecret, KVMetadata, KVVersion } from '@/types/vault';
 
 export async function listSecrets(path: string): Promise<string[]> {
-  const res = await vaultFetch<{ data: { keys: string[] } }>(
-    `/secret/metadata/${path}`,
-    { method: 'LIST' }
-  );
-  return res.data.keys;
+  try {
+    const res = await vaultFetch<{ data: { keys: string[] } }>(
+      `/secret/metadata/${path}`,
+      { method: 'LIST' }
+    );
+    return res.data.keys ?? [];
+  } catch (err) {
+    if (err instanceof VaultError && err.status === 404) return [];
+    throw err;
+  }
 }
 
 export async function readSecret(path: string, version?: number): Promise<KVSecret> {
