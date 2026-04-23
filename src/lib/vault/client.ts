@@ -75,7 +75,7 @@ export async function vaultFetch<T>(path: string, opts: VaultRequestOptions = {}
 
   try {
     const url = buildUrl(addr, path, effectiveQuery);
-    return await doFetch<T>(url, method, token);
+    return await doFetch<T>(url, method, token, body);
   } catch (err) {
     if (err instanceof VaultError) throw err;
 
