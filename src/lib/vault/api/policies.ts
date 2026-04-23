@@ -1,8 +1,14 @@
 import { vaultFetch } from '../client';
+import { VaultError } from '../errors';
 
 export async function listAclPolicies(): Promise<string[]> {
-  const res = await vaultFetch<{ data: { keys: string[] } }>('/sys/policies/acl', { method: 'LIST' });
-  return res.data.keys;
+  try {
+    const res = await vaultFetch<{ data: { keys: string[] } }>('/sys/policies/acl', { method: 'LIST' });
+    return res.data.keys ?? [];
+  } catch (err) {
+    if (err instanceof VaultError && err.status === 404) return [];
+    throw err;
+  }
 }
 
 export async function getAclPolicy(name: string): Promise<string> {
@@ -19,8 +25,13 @@ export async function deleteAclPolicy(name: string): Promise<void> {
 }
 
 export async function listPasswordPolicies(): Promise<string[]> {
-  const res = await vaultFetch<{ data: { keys: string[] } }>('/sys/policies/password', { method: 'LIST' });
-  return res.data.keys;
+  try {
+    const res = await vaultFetch<{ data: { keys: string[] } }>('/sys/policies/password', { method: 'LIST' });
+    return res.data.keys ?? [];
+  } catch (err) {
+    if (err instanceof VaultError && err.status === 404) return [];
+    throw err;
+  }
 }
 
 export async function getPasswordPolicy(name: string): Promise<string> {

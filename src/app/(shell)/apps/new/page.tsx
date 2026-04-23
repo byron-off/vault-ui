@@ -76,7 +76,7 @@ type Operation = {
 
 function deriveNames(appName: string, projectName: string, category: string, env: string) {
   return {
-    kvPath: `app/${projectName}/${category}/${appName}/${env}/`,
+    kvPath: `app/${projectName}/${category}/${appName}/${env}`,
     policyName: `${projectName}-${appName}-${env}-policy`,
     approleName: `${projectName}-${appName}-${env}-role`,
   };
