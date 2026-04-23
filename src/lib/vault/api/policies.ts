@@ -6,8 +6,8 @@ export async function listAclPolicies(): Promise<string[]> {
 }
 
 export async function getAclPolicy(name: string): Promise<string> {
-  const res = await vaultFetch<{ data: { name: string; rules: string } }>(`/sys/policies/acl/${name}`);
-  return res.data.rules;
+  const res = await vaultFetch<{ data: { name: string; policy: string } }>(`/sys/policies/acl/${name}`);
+  return res.data.policy ?? '';
 }
 
 export async function writeAclPolicy(name: string, policy: string): Promise<void> {
