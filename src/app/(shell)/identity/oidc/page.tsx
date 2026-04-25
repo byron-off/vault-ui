@@ -100,6 +100,7 @@ function ResourceTable({
       ) : (listQuery.data ?? []).length === 0 ? (
         <p className="text-sm text-muted-foreground text-center py-8">No {resource}s configured</p>
       ) : (
+        <div className="overflow-x-auto">
         <Table>
           <TableHeader>
             <TableRow>
@@ -146,6 +147,7 @@ function ResourceTable({
             ))}
           </TableBody>
         </Table>
+        </div>
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>

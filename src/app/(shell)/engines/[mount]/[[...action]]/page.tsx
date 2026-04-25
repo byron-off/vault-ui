@@ -97,11 +97,11 @@ function PKIEngine({ mount }: { mount: string }) {
           </div>
           <Button onClick={() => createRole.mutate()} disabled={!roleForm.name || createRole.isPending}>Create Role</Button>
         </CardContent></Card>
-        <Table><TableHeader><TableRow><TableHead>Name</TableHead><TableHead className="w-20">Actions</TableHead></TableRow></TableHeader>
+        <div className="overflow-x-auto"><Table><TableHeader><TableRow><TableHead>Name</TableHead><TableHead className="w-20">Actions</TableHead></TableRow></TableHeader>
           <TableBody>{(rolesQ.data ?? []).map(r => <TableRow key={r}><TableCell className="font-mono text-sm">{r}</TableCell><TableCell>
             <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={async () => { await vaultFetch(`/${mount}/roles/${r}`, { method: 'DELETE' }); qc.invalidateQueries({ queryKey: ['engine', mount, 'roles'] }); toast.success('Role deleted'); }}><Trash2 className="w-3.5 h-3.5" /></Button>
           </TableCell></TableRow>)}</TableBody>
-        </Table>
+        </Table></div>
       </TabsContent>
 
       <TabsContent value="issue" className="mt-4">
@@ -121,9 +121,9 @@ function PKIEngine({ mount }: { mount: string }) {
 
       <TabsContent value="revoked" className="mt-4">
         {certsQ.isLoading ? <Skeleton className="h-24 w-full" /> : (certsQ.data ?? []).length === 0 ? <p className="text-sm text-muted-foreground text-center py-8">No certificates issued</p> : (
-          <Table><TableHeader><TableRow><TableHead>Serial Number</TableHead></TableRow></TableHeader>
+          <div className="overflow-x-auto"><Table><TableHeader><TableRow><TableHead>Serial Number</TableHead></TableRow></TableHeader>
             <TableBody>{(certsQ.data ?? []).map(s => <TableRow key={s}><TableCell className="font-mono text-xs">{s}</TableCell></TableRow>)}</TableBody>
-          </Table>
+          </Table></div>
         )}
       </TabsContent>
     </Tabs>
@@ -178,7 +178,7 @@ function TransitEngine({ mount }: { mount: string }) {
           <div className="space-y-1.5"><Label>Type</Label><Select value={newKeyType} onValueChange={setNewKeyType}><SelectTrigger className="w-40"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="aes256-gcm96">aes256-gcm96</SelectItem><SelectItem value="rsa-2048">rsa-2048</SelectItem><SelectItem value="rsa-4096">rsa-4096</SelectItem><SelectItem value="ecdsa-p256">ecdsa-p256</SelectItem><SelectItem value="ed25519">ed25519</SelectItem></SelectContent></Select></div>
           <Button onClick={() => createKey.mutate()} disabled={!newKeyName || createKey.isPending}>Create</Button>
         </CardContent></Card>
-        <Table><TableHeader><TableRow><TableHead>Name</TableHead><TableHead className="w-40">Actions</TableHead></TableRow></TableHeader>
+        <div className="overflow-x-auto"><Table><TableHeader><TableRow><TableHead>Name</TableHead><TableHead className="w-40">Actions</TableHead></TableRow></TableHeader>
           <TableBody>{(keysQ.data ?? []).map(k => <TableRow key={k}><TableCell className="font-mono text-sm">{k}</TableCell><TableCell className="flex gap-1">
             <Button variant="ghost" size="sm" onClick={() => rotateKey.mutate(k)}><RotateCcw className="w-3.5 h-3.5" />Rotate</Button>
             <AlertDialog><AlertDialogTrigger asChild><Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive"><Trash2 className="w-3.5 h-3.5" /></Button></AlertDialogTrigger>
@@ -186,7 +186,7 @@ function TransitEngine({ mount }: { mount: string }) {
                 <AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction className="bg-destructive text-destructive-foreground" onClick={async () => { await vaultFetch(`/${mount}/keys/${k}/config`, { method: 'POST', body: { deletion_allowed: true } }); await vaultFetch(`/${mount}/keys/${k}`, { method: 'DELETE' }); qc.invalidateQueries({ queryKey: ['engine', mount, 'keys'] }); toast.success('Key deleted'); }}>Delete</AlertDialogAction></AlertDialogFooter>
               </AlertDialogContent></AlertDialog>
           </TableCell></TableRow>)}</TableBody>
-        </Table>
+        </Table></div>
       </TabsContent>
 
       <TabsContent value="encrypt" className="mt-4 space-y-4">
@@ -251,11 +251,11 @@ function TOTPEngine({ mount }: { mount: string }) {
           </div>
           <Button onClick={() => createKey.mutate()} disabled={!newKey.name || createKey.isPending}>Create Key</Button>
         </CardContent></Card>
-        <Table><TableHeader><TableRow><TableHead>Name</TableHead><TableHead className="w-20">Actions</TableHead></TableRow></TableHeader>
+        <div className="overflow-x-auto"><Table><TableHeader><TableRow><TableHead>Name</TableHead><TableHead className="w-20">Actions</TableHead></TableRow></TableHeader>
           <TableBody>{(keysQ.data ?? []).map(k => <TableRow key={k}><TableCell className="font-mono text-sm">{k}</TableCell><TableCell>
             <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={async () => { await vaultFetch(`/${mount}/keys/${k}`, { method: 'DELETE' }); qc.invalidateQueries({ queryKey: ['engine', mount, 'keys'] }); toast.success('Key deleted'); }}><Trash2 className="w-3.5 h-3.5" /></Button>
           </TableCell></TableRow>)}</TableBody>
-        </Table>
+        </Table></div>
       </TabsContent>
 
       <TabsContent value="generate" className="mt-4 space-y-4">

@@ -615,7 +615,7 @@ export default function SecretsPage() {
   );
 
   return (
-    <div className="flex flex-col h-[calc(100vh-theme(spacing.12)-theme(spacing.8))]">
+    <div className="flex flex-col md:h-[calc(100vh-theme(spacing.12)-theme(spacing.8))]">
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <div>
@@ -629,9 +629,9 @@ export default function SecretsPage() {
       </div>
 
       {/* Two-pane layout */}
-      <div className="flex gap-4 flex-1 overflow-hidden">
+      <div className="flex flex-col md:flex-row gap-4 md:flex-1 md:overflow-hidden">
         {/* Left: file browser */}
-        <div className="w-72 border rounded-lg flex flex-col overflow-hidden">
+        <div className="md:w-72 border rounded-lg flex flex-col overflow-hidden md:overflow-hidden" style={{ maxHeight: '50vh' }}>
           <div className="p-3 border-b">
             <div className="relative">
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
@@ -690,7 +690,7 @@ export default function SecretsPage() {
         </div>
 
         {/* Right: detail panel */}
-        <div className="flex-1 border rounded-lg overflow-hidden">
+        <div className="flex-1 border rounded-lg overflow-hidden min-h-[300px]">
           {selectedSecret ? (
             <SecretDetail kvPath={kvPath} name={selectedSecret} />
           ) : (
