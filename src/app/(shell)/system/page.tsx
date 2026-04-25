@@ -5,7 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
   ShieldCheck, ShieldOff, Server, Wifi, Wrench, Hash,
-  Plus, Trash2, Loader2, RefreshCw,
+  Plus, Trash2, Loader2, RefreshCw, RotateCcw, Users, Gauge, Unlock,
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -389,6 +389,382 @@ function ToolsTab() {
   );
 }
 
+// ─── Rotate Tab ────────────────────────────────────────────────────────────────
+
+function RotateTab() {
+  const qc = useQueryClient();
+
+  const keyStatusQuery = useQuery({
+    queryKey: ['sys', 'key-status'],
+    queryFn: () =>
+      vaultFetch<{ data: { term: number; install_time: string; encryptions: number } }>(
+        '/sys/key-status'
+      ).then((r) => r.data),
+  });
+
+  const rotateMutation = useMutation({
+    mutationFn: () => vaultFetch('/sys/rotate', { method: 'POST' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['sys', 'key-status'] });
+      toast.success('Encryption key rotated successfully');
+    },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  const ks = keyStatusQuery.data;
+
+  return (
+    <div className="space-y-4 max-w-lg">
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2">
+            <RotateCcw className="w-4 h-4" /> Encryption Key Status
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {keyStatusQuery.isLoading ? (
+            <Skeleton className="h-16 w-full" />
+          ) : ks ? (
+            <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
+              <span className="text-muted-foreground">Current Term</span>
+              <span className="font-mono">{ks.term}</span>
+              <span className="text-muted-foreground">Installed</span>
+              <span className="text-sm">{new Date(ks.install_time).toLocaleString()}</span>
+              <span className="text-muted-foreground">Encryptions</span>
+              <span className="font-mono">{ks.encryptions?.toLocaleString() ?? '—'}</span>
+            </div>
+          ) : null}
+
+          <Alert>
+            <AlertDescription className="text-sm">
+              Rotating the encryption key generates a new key for encrypting new data. Existing
+              data remains readable and will be re-encrypted lazily on next access.
+            </AlertDescription>
+          </Alert>
+
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button variant="outline" disabled={rotateMutation.isPending}>
+                <RotateCcw className={`w-4 h-4 mr-2 ${rotateMutation.isPending ? 'animate-spin' : ''}`} />
+                Rotate Encryption Key
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Rotate encryption key?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  A new encryption key (term {(ks?.term ?? 0) + 1}) will be generated and used
+                  for all new data. This operation cannot be undone.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction onClick={() => rotateMutation.mutate()}>Rotate</AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+// ─── Quotas Tab ─────────────────────────────────────────────────────────────────
+
+type RateLimitQuota = {
+  name: string;
+  path: string;
+  rate: number;
+  interval: number;
+  block_interval: number;
+  type: string;
+};
+
+function QuotasTab() {
+  const qc = useQueryClient();
+  const [createOpen, setCreateOpen] = useState(false);
+  const [form, setForm] = useState({ name: '', path: '', rate: '100', interval: '1', block_interval: '0' });
+
+  const listQuery = useQuery({
+    queryKey: ['sys', 'quotas', 'rate-limit'],
+    queryFn: async () => {
+      try {
+        const res = await vaultFetch<{ data: { keys: string[] } }>(
+          '/sys/quotas/rate-limit', { method: 'LIST' }
+        );
+        const details = await Promise.allSettled(
+          (res.data.keys ?? []).map((name) =>
+            vaultFetch<{ data: RateLimitQuota }>(`/sys/quotas/rate-limit/${name}`).then((r) => r.data)
+          )
+        );
+        return details.flatMap((r) => (r.status === 'fulfilled' ? [r.value] : []));
+      } catch (err) {
+        if (err instanceof VaultError && err.status === 404) return [];
+        throw err;
+      }
+    },
+  });
+
+  const createMutation = useMutation({
+    mutationFn: () =>
+      vaultFetch(`/sys/quotas/rate-limit/${form.name}`, {
+        method: 'POST',
+        body: {
+          path: form.path || undefined,
+          rate: parseFloat(form.rate),
+          interval: parseInt(form.interval) || 1,
+          block_interval: parseInt(form.block_interval) || undefined,
+        },
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['sys', 'quotas'] });
+      toast.success('Rate limit quota created');
+      setCreateOpen(false);
+      setForm({ name: '', path: '', rate: '100', interval: '1', block_interval: '0' });
+    },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (name: string) =>
+      vaultFetch(`/sys/quotas/rate-limit/${name}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['sys', 'quotas'] });
+      toast.success('Quota deleted');
+    },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  const quotas = listQuery.data ?? [];
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h3 className="font-medium text-sm">Rate Limit Quotas</h3>
+        <Button size="sm" onClick={() => setCreateOpen(true)}>
+          <Plus className="w-4 h-4 mr-1" /> New Quota
+        </Button>
+      </div>
+
+      {listQuery.isLoading ? (
+        <Skeleton className="h-24 w-full" />
+      ) : quotas.length === 0 ? (
+        <p className="text-sm text-muted-foreground text-center py-8">No rate limit quotas configured</p>
+      ) : (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Name</TableHead>
+              <TableHead>Path</TableHead>
+              <TableHead>Rate (req/s)</TableHead>
+              <TableHead>Interval (s)</TableHead>
+              <TableHead>Block Interval (s)</TableHead>
+              <TableHead className="w-16">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {quotas.map((q) => (
+              <TableRow key={q.name}>
+                <TableCell className="font-mono text-sm">{q.name}</TableCell>
+                <TableCell className="font-mono text-xs text-muted-foreground">{q.path || <span className="italic">global</span>}</TableCell>
+                <TableCell>{q.rate}</TableCell>
+                <TableCell>{q.interval}</TableCell>
+                <TableCell>{q.block_interval || '—'}</TableCell>
+                <TableCell>
+                  <AlertDialog>
+                    <AlertDialogTrigger asChild>
+                      <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive">
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </Button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Delete quota?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          This will remove the rate limit quota <strong>{q.name}</strong>.
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction
+                          className="bg-destructive text-destructive-foreground"
+                          onClick={() => deleteMutation.mutate(q.name)}
+                        >
+                          Delete
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+
+      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Create Rate Limit Quota</DialogTitle></DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <Label>Name <span className="text-destructive">*</span></Label>
+              <Input placeholder="global-rate-limit" value={form.name}
+                onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))} />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Path (leave empty for global)</Label>
+              <Input placeholder="auth/userpass/" value={form.path}
+                onChange={(e) => setForm((p) => ({ ...p, path: e.target.value }))} />
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <div className="space-y-1.5">
+                <Label>Rate (req/s) <span className="text-destructive">*</span></Label>
+                <Input type="number" value={form.rate}
+                  onChange={(e) => setForm((p) => ({ ...p, rate: e.target.value }))} />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Interval (s)</Label>
+                <Input type="number" value={form.interval}
+                  onChange={(e) => setForm((p) => ({ ...p, interval: e.target.value }))} />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Block Interval (s)</Label>
+                <Input type="number" value={form.block_interval}
+                  onChange={(e) => setForm((p) => ({ ...p, block_interval: e.target.value }))} />
+                <p className="text-xs text-muted-foreground">0 = no block</p>
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
+            <Button
+              onClick={() => createMutation.mutate()}
+              disabled={!form.name || !form.rate || createMutation.isPending}
+            >
+              {createMutation.isPending ? 'Creating…' : 'Create'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+// ─── Locked Users Tab ───────────────────────────────────────────────────────────
+
+type LockedAlias = { name: string; last_failed_login?: string; failed_login_count?: number };
+type LockedMount = { alias_count: number; aliases: LockedAlias[] };
+
+function LockedUsersTab() {
+  const qc = useQueryClient();
+
+  const lockedQuery = useQuery({
+    queryKey: ['sys', 'locked-users'],
+    queryFn: async () => {
+      try {
+        const res = await vaultFetch<{ data: { by_mount: Record<string, LockedMount> } }>(
+          '/sys/locked-users'
+        );
+        return res.data.by_mount ?? {};
+      } catch (err) {
+        if (err instanceof VaultError && err.status === 404) return {};
+        throw err;
+      }
+    },
+  });
+
+  const unlockMutation = useMutation({
+    mutationFn: ({ accessor, aliasName }: { accessor: string; aliasName: string }) =>
+      vaultFetch(`/sys/locked-users/${accessor}/unlock`, {
+        method: 'POST',
+        body: { alias_identifier: aliasName },
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['sys', 'locked-users'] });
+      toast.success('User unlocked');
+    },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  const byMount = lockedQuery.data ?? {};
+  const entries = Object.entries(byMount);
+  const totalLocked = entries.reduce((sum, [, m]) => sum + (m.alias_count ?? 0), 0);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h3 className="font-medium text-sm">Locked Users</h3>
+        <Button
+          variant="outline" size="sm"
+          onClick={() => qc.invalidateQueries({ queryKey: ['sys', 'locked-users'] })}
+        >
+          <RefreshCw className="w-3.5 h-3.5 mr-1" /> Refresh
+        </Button>
+      </div>
+
+      {lockedQuery.isLoading ? (
+        <Skeleton className="h-24 w-full" />
+      ) : entries.length === 0 || totalLocked === 0 ? (
+        <Card>
+          <CardContent className="pt-6 text-center text-muted-foreground py-10">
+            <Users className="w-8 h-8 opacity-30 mx-auto mb-2" />
+            <p className="text-sm">No locked users</p>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="space-y-4">
+          {entries.map(([accessor, mount]) => (
+            <Card key={accessor}>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-mono flex items-center gap-2">
+                  {accessor}
+                  <Badge variant="destructive" className="text-xs">{mount.alias_count} locked</Badge>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pb-3">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Username</TableHead>
+                      <TableHead>Failed Attempts</TableHead>
+                      <TableHead>Last Failed</TableHead>
+                      <TableHead className="w-24">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {(mount.aliases ?? []).map((alias) => (
+                      <TableRow key={alias.name}>
+                        <TableCell className="font-mono text-sm">{alias.name}</TableCell>
+                        <TableCell>
+                          <Badge variant="outline">{alias.failed_login_count ?? '—'}</Badge>
+                        </TableCell>
+                        <TableCell className="text-xs text-muted-foreground">
+                          {alias.last_failed_login
+                            ? new Date(alias.last_failed_login).toLocaleString()
+                            : '—'}
+                        </TableCell>
+                        <TableCell>
+                          <Button
+                            size="sm" variant="outline"
+                            onClick={() => unlockMutation.mutate({ accessor, aliasName: alias.name })}
+                            disabled={unlockMutation.isPending}
+                          >
+                            <Unlock className="w-3.5 h-3.5 mr-1" /> Unlock
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Page ──────────────────────────────────────────────────────────────────────
 
 export default function SystemPage() {
@@ -407,11 +783,17 @@ export default function SystemPage() {
           <TabsTrigger value="audit">Audit</TabsTrigger>
           <TabsTrigger value="cors">CORS</TabsTrigger>
           <TabsTrigger value="tools">Tools</TabsTrigger>
+          <TabsTrigger value="rotate">Key Rotation</TabsTrigger>
+          <TabsTrigger value="quotas"><Gauge className="w-3.5 h-3.5 mr-1" />Quotas</TabsTrigger>
+          <TabsTrigger value="locked-users"><Users className="w-3.5 h-3.5 mr-1" />Locked Users</TabsTrigger>
         </TabsList>
         <TabsContent value="status" className="mt-4"><StatusTab /></TabsContent>
         <TabsContent value="audit" className="mt-4"><AuditTab /></TabsContent>
         <TabsContent value="cors" className="mt-4"><CORSTab /></TabsContent>
         <TabsContent value="tools" className="mt-4"><ToolsTab /></TabsContent>
+        <TabsContent value="rotate" className="mt-4"><RotateTab /></TabsContent>
+        <TabsContent value="quotas" className="mt-4"><QuotasTab /></TabsContent>
+        <TabsContent value="locked-users" className="mt-4"><LockedUsersTab /></TabsContent>
       </Tabs>
     </div>
   );
