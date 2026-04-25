@@ -30,6 +30,7 @@ import {
 } from '@/components/ui/table';
 import { Switch } from '@/components/ui/switch';
 import { Separator } from '@/components/ui/separator';
+import { CidrInput } from '@/components/ui/cidr-input';
 
 import { vaultFetch } from '@/lib/vault/client';
 import { truncate, formatTTL } from '@/lib/utils';
@@ -54,6 +55,16 @@ function AppRoleAuth({ mount }: { mount: string }) {
   const [newRole, setNewRole] = useState({
     name: '', token_ttl: '1h', token_max_ttl: '24h',
     secret_id_ttl: '24h', policies: '', bind_secret_id: true,
+    bound_cidr_list: [] as string[],
+    secret_id_bound_cidrs: [] as string[],
+    token_bound_cidrs: [] as string[],
+  });
+  const [editOpen, setEditOpen] = useState(false);
+  const [editForm, setEditForm] = useState({
+    token_ttl: '', token_max_ttl: '', secret_id_ttl: '', policies: '', bind_secret_id: true,
+    bound_cidr_list: [] as string[],
+    secret_id_bound_cidrs: [] as string[],
+    token_bound_cidrs: [] as string[],
   });
 
   const rolesQ = useQuery({
@@ -88,9 +99,15 @@ function AppRoleAuth({ mount }: { mount: string }) {
         token_ttl: newRole.token_ttl, token_max_ttl: newRole.token_max_ttl,
         secret_id_ttl: newRole.secret_id_ttl, bind_secret_id: newRole.bind_secret_id,
         token_policies: newRole.policies.split(',').map(p => p.trim()).filter(Boolean),
+        bound_cidr_list: newRole.bound_cidr_list,
+        secret_id_bound_cidrs: newRole.secret_id_bound_cidrs,
+        token_bound_cidrs: newRole.token_bound_cidrs,
       },
     }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['auth', mount, 'roles'] }); toast.success('Role created'); setCreateOpen(false); setNewRole({ name: '', token_ttl: '1h', token_max_ttl: '24h', secret_id_ttl: '24h', policies: '', bind_secret_id: true }); },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['auth', mount, 'roles'] }); toast.success('Role created'); setCreateOpen(false);
+      setNewRole({ name: '', token_ttl: '1h', token_max_ttl: '24h', secret_id_ttl: '24h', policies: '', bind_secret_id: true, bound_cidr_list: [], secret_id_bound_cidrs: [], token_bound_cidrs: [] });
+    },
     onError: (e) => toast.error((e as Error).message),
   });
 
@@ -110,6 +127,26 @@ function AppRoleAuth({ mount }: { mount: string }) {
     mutationFn: ({ name, accessor }: { name: string; accessor: string }) =>
       vaultFetch(`/auth/${mount}/role/${name}/secret-id-accessor/destroy`, { method: 'POST', body: { secret_id_accessor: accessor } }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['auth', mount, 'secret-ids', selected] }); toast.success('Secret ID destroyed'); },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  const editRole = useMutation({
+    mutationFn: () => vaultFetch(`/auth/${mount}/role/${selected}`, {
+      method: 'POST',
+      body: {
+        token_ttl: editForm.token_ttl, token_max_ttl: editForm.token_max_ttl,
+        secret_id_ttl: editForm.secret_id_ttl, bind_secret_id: editForm.bind_secret_id,
+        token_policies: editForm.policies.split(',').map((p) => p.trim()).filter(Boolean),
+        bound_cidr_list: editForm.bound_cidr_list,
+        secret_id_bound_cidrs: editForm.secret_id_bound_cidrs,
+        token_bound_cidrs: editForm.token_bound_cidrs,
+      },
+    }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['auth', mount, 'role', selected] });
+      setEditOpen(false);
+      toast.success('Role updated');
+    },
     onError: (e) => toast.error((e as Error).message),
   });
 
@@ -167,7 +204,27 @@ function AppRoleAuth({ mount }: { mount: string }) {
 
                 {/* Config */}
                 {roleDetailQ.isLoading ? <Skeleton className="h-32 w-full" /> : roleDetailQ.data && (
-                  <Card><CardHeader className="pb-2"><CardTitle className="text-sm">Configuration</CardTitle></CardHeader>
+                  <Card>
+                    <CardHeader className="pb-2 flex flex-row items-center justify-between space-y-0">
+                      <CardTitle className="text-sm">Configuration</CardTitle>
+                      <Button size="sm" variant="outline" className="h-7 text-xs"
+                        onClick={() => {
+                          const d = roleDetailQ.data!;
+                          setEditForm({
+                            token_ttl: String(d.token_ttl ?? ''),
+                            token_max_ttl: String(d.token_max_ttl ?? ''),
+                            secret_id_ttl: String(d.secret_id_ttl ?? ''),
+                            policies: ((d.token_policies ?? []) as string[]).join(', '),
+                            bind_secret_id: Boolean(d.bind_secret_id ?? true),
+                            bound_cidr_list: (d.bound_cidr_list ?? []) as string[],
+                            secret_id_bound_cidrs: (d.secret_id_bound_cidrs ?? []) as string[],
+                            token_bound_cidrs: (d.token_bound_cidrs ?? []) as string[],
+                          });
+                          setEditOpen(true);
+                        }}>
+                        Edit
+                      </Button>
+                    </CardHeader>
                     <CardContent className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
                       {[
                         ['Token TTL', String(roleDetailQ.data.token_ttl ?? '—')],
@@ -181,6 +238,24 @@ function AppRoleAuth({ mount }: { mount: string }) {
                           <span key={`v-${k}`} className="font-mono text-xs">{v}</span>
                         </>
                       ))}
+                      {((roleDetailQ.data.bound_cidr_list ?? []) as string[]).length > 0 && (
+                        <>
+                          <span className="text-muted-foreground">Bound CIDRs</span>
+                          <span className="font-mono text-xs">{((roleDetailQ.data.bound_cidr_list ?? []) as string[]).join(', ')}</span>
+                        </>
+                      )}
+                      {((roleDetailQ.data.secret_id_bound_cidrs ?? []) as string[]).length > 0 && (
+                        <>
+                          <span className="text-muted-foreground">Secret ID CIDRs</span>
+                          <span className="font-mono text-xs">{((roleDetailQ.data.secret_id_bound_cidrs ?? []) as string[]).join(', ')}</span>
+                        </>
+                      )}
+                      {((roleDetailQ.data.token_bound_cidrs ?? []) as string[]).length > 0 && (
+                        <>
+                          <span className="text-muted-foreground">Token CIDRs</span>
+                          <span className="font-mono text-xs">{((roleDetailQ.data.token_bound_cidrs ?? []) as string[]).join(', ')}</span>
+                        </>
+                      )}
                     </CardContent>
                   </Card>
                 )}
@@ -259,10 +334,39 @@ function AppRoleAuth({ mount }: { mount: string }) {
             </div>
             <div className="space-y-1.5"><Label>Policies (comma-separated)</Label><Input value={newRole.policies} onChange={e => setNewRole(p => ({ ...p, policies: e.target.value }))} placeholder="default,my-policy" /></div>
             <div className="flex items-center gap-2"><Switch checked={newRole.bind_secret_id} onCheckedChange={v => setNewRole(p => ({ ...p, bind_secret_id: v }))} /><Label>Bind Secret ID</Label></div>
+            <div className="space-y-1.5"><Label className="text-xs text-muted-foreground">Bound CIDR List (optional)</Label><CidrInput value={newRole.bound_cidr_list} onChange={v => setNewRole(p => ({ ...p, bound_cidr_list: v }))} /></div>
+            <div className="space-y-1.5"><Label className="text-xs text-muted-foreground">Secret ID Bound CIDRs (optional)</Label><CidrInput value={newRole.secret_id_bound_cidrs} onChange={v => setNewRole(p => ({ ...p, secret_id_bound_cidrs: v }))} /></div>
+            <div className="space-y-1.5"><Label className="text-xs text-muted-foreground">Token Bound CIDRs (optional)</Label><CidrInput value={newRole.token_bound_cidrs} onChange={v => setNewRole(p => ({ ...p, token_bound_cidrs: v }))} /></div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
             <Button onClick={() => createRole.mutate()} disabled={!newRole.name || createRole.isPending}>Create</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit role dialog */}
+      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader><DialogTitle>Edit Role — {selected}</DialogTitle></DialogHeader>
+          <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-1">
+            <div className="grid grid-cols-2 gap-3">
+              {(['token_ttl', 'token_max_ttl', 'secret_id_ttl'] as const).map(f => (
+                <div key={f} className="space-y-1.5">
+                  <Label className="text-xs">{f.replace(/_/g, ' ')}</Label>
+                  <Input value={editForm[f]} onChange={e => setEditForm(p => ({ ...p, [f]: e.target.value }))} />
+                </div>
+              ))}
+            </div>
+            <div className="space-y-1.5"><Label className="text-xs">Policies (comma-separated)</Label><Input value={editForm.policies} onChange={e => setEditForm(p => ({ ...p, policies: e.target.value }))} placeholder="default,my-policy" /></div>
+            <div className="flex items-center gap-2"><Switch checked={editForm.bind_secret_id} onCheckedChange={v => setEditForm(p => ({ ...p, bind_secret_id: v }))} /><Label className="text-xs">Bind Secret ID</Label></div>
+            <div className="space-y-1.5"><Label className="text-xs text-muted-foreground">Bound CIDR List</Label><CidrInput value={editForm.bound_cidr_list} onChange={v => setEditForm(p => ({ ...p, bound_cidr_list: v }))} /></div>
+            <div className="space-y-1.5"><Label className="text-xs text-muted-foreground">Secret ID Bound CIDRs</Label><CidrInput value={editForm.secret_id_bound_cidrs} onChange={v => setEditForm(p => ({ ...p, secret_id_bound_cidrs: v }))} /></div>
+            <div className="space-y-1.5"><Label className="text-xs text-muted-foreground">Token Bound CIDRs</Label><CidrInput value={editForm.token_bound_cidrs} onChange={v => setEditForm(p => ({ ...p, token_bound_cidrs: v }))} /></div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditOpen(false)}>Cancel</Button>
+            <Button onClick={() => editRole.mutate()} disabled={editRole.isPending}>Save</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

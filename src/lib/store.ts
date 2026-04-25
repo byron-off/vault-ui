@@ -11,9 +11,10 @@ const RECENT_ADDRS_KEY = 'vault-ui:recent-addrs';
 type ConnectionStore = {
   addr: string | null;
   token: string | null;
+  namespace: string;
   tokenInfo: TokenInfo | null;
   recentAddrs: string[];
-  setConnection: (addr: string, token: string, tokenInfo: TokenInfo) => void;
+  setConnection: (addr: string, token: string, tokenInfo: TokenInfo, namespace?: string) => void;
   setTokenInfo: (info: TokenInfo) => void;
   disconnect: () => void;
 };
@@ -37,21 +38,21 @@ export const useConnectionStore = create<ConnectionStore>()(
     (set, get) => ({
       addr: null,
       token: null,
+      namespace: '',
       tokenInfo: null,
       recentAddrs: [],
 
-      setConnection: (addr, token, tokenInfo) => {
+      setConnection: (addr, token, tokenInfo, namespace = '') => {
         const current = get().recentAddrs;
         const filtered = current.filter((a) => a !== addr);
         const updated = [addr, ...filtered].slice(0, 5);
         saveRecentAddrs(updated);
 
-        // Store token info separately
         if (typeof window !== 'undefined') {
           localStorage.setItem(TOKEN_INFO_KEY, JSON.stringify(tokenInfo));
         }
 
-        set({ addr, token, tokenInfo, recentAddrs: updated });
+        set({ addr, token, namespace, tokenInfo, recentAddrs: updated });
       },
 
       setTokenInfo: (tokenInfo) => {
@@ -65,7 +66,7 @@ export const useConnectionStore = create<ConnectionStore>()(
         if (typeof window !== 'undefined') {
           localStorage.removeItem(TOKEN_INFO_KEY);
         }
-        set({ addr: null, token: null, tokenInfo: null });
+        set({ addr: null, token: null, namespace: '', tokenInfo: null });
       },
     }),
     {
@@ -73,6 +74,7 @@ export const useConnectionStore = create<ConnectionStore>()(
       partialize: (state) => ({
         addr: state.addr,
         token: state.token,
+        namespace: state.namespace,
         recentAddrs: loadRecentAddrs(),
       }),
       onRehydrateStorage: () => (state) => {

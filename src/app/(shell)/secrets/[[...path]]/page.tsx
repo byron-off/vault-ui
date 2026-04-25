@@ -3,6 +3,7 @@
 import { useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { useQuery } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
   Folder,
@@ -20,6 +21,7 @@ import {
   Home,
   Search,
   RotateCcw,
+  Database,
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -29,6 +31,7 @@ import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Card, CardContent } from '@/components/ui/card';
 import {
   Dialog,
   DialogContent,
@@ -66,23 +69,26 @@ import {
   useDestroyVersions,
   useDeleteSecretMetadata,
 } from '@/hooks/use-secrets';
+import type { KVCtx } from '@/lib/vault/api/secrets';
+import { listMounts } from '@/lib/vault/api/mounts';
 import { relativeTime } from '@/lib/utils';
 
-// ─── Breadcrumb ──────────────────────────────────────────────────────────────
+// ─── Breadcrumb ───────────────────────────────────────────────────────────────
 
-function SecretsBreadcrumb({ segments }: { segments: string[] }) {
+function SecretsBreadcrumb({ mount, pathSegs }: { mount: string; pathSegs: string[] }) {
+  const allSegs = [mount, ...pathSegs];
   return (
     <nav className="flex items-center gap-1 text-sm text-muted-foreground flex-wrap">
       <Link href="/secrets" className="hover:text-foreground transition-colors">
         <Home className="w-3.5 h-3.5 inline" />
       </Link>
-      {segments.map((seg, i) => (
+      {allSegs.map((seg, i) => (
         <span key={i} className="flex items-center gap-1">
           <ChevronRight className="w-3.5 h-3.5 text-border" />
           <Link
-            href={`/secrets/${segments.slice(0, i + 1).join('/')}`}
+            href={`/secrets/${allSegs.slice(0, i + 1).join('/')}`}
             className={
-              i === segments.length - 1
+              i === allSegs.length - 1
                 ? 'text-foreground font-medium'
                 : 'hover:text-foreground transition-colors'
             }
@@ -97,44 +103,25 @@ function SecretsBreadcrumb({ segments }: { segments: string[] }) {
 
 // ─── Secret value row ─────────────────────────────────────────────────────────
 
-function SecretValueRow({
-  secretKey,
-  value,
-}: {
-  secretKey: string;
-  value: string;
-}) {
+function SecretValueRow({ secretKey, value }: { secretKey: string; value: string }) {
   const [revealed, setRevealed] = useState(false);
   const [copied, setCopied] = useState(false);
-
   const copy = () => {
     navigator.clipboard.writeText(value);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
-
   return (
     <TableRow>
       <TableCell className="font-mono text-sm w-1/3">{secretKey}</TableCell>
-      <TableCell className="font-mono text-sm">
-        {revealed ? value : '••••••••'}
-      </TableCell>
+      <TableCell className="font-mono text-sm">{revealed ? value : '••••••••'}</TableCell>
       <TableCell className="w-20">
         <div className="flex items-center gap-1">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7"
-            onClick={() => setRevealed((v) => !v)}
-          >
+          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setRevealed((v) => !v)}>
             {revealed ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
           </Button>
           <Button variant="ghost" size="icon" className="h-7 w-7" onClick={copy}>
-            {copied ? (
-              <Check className="w-3.5 h-3.5 text-green-600" />
-            ) : (
-              <Copy className="w-3.5 h-3.5" />
-            )}
+            {copied ? <Check className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />}
           </Button>
         </div>
       </TableCell>
@@ -142,17 +129,11 @@ function SecretValueRow({
   );
 }
 
-// ─── Edit mode row ────────────────────────────────────────────────────────────
+// ─── Editable KV table ────────────────────────────────────────────────────────
 
 type KVRow = { key: string; value: string };
 
-function EditableKVTable({
-  rows,
-  onChange,
-}: {
-  rows: KVRow[];
-  onChange: (rows: KVRow[]) => void;
-}) {
+function EditableKVTable({ rows, onChange }: { rows: KVRow[]; onChange: (rows: KVRow[]) => void }) {
   const add = () => onChange([...rows, { key: '', value: '' }]);
   const remove = (i: number) => onChange(rows.filter((_, idx) => idx !== i));
   const update = (i: number, field: 'key' | 'value', val: string) => {
@@ -160,31 +141,19 @@ function EditableKVTable({
     next[i] = { ...next[i], [field]: val };
     onChange(next);
   };
-
   return (
     <div className="space-y-2">
       {rows.map((row, i) => (
         <div key={i} className="flex gap-2 items-center">
-          <Input
-            placeholder="Key"
-            value={row.key}
-            onChange={(e) => update(i, 'key', e.target.value)}
-            className="flex-1 font-mono text-sm"
-          />
-          <Input
-            placeholder="Value"
-            value={row.value}
-            onChange={(e) => update(i, 'value', e.target.value)}
-            className="flex-1 font-mono text-sm"
-          />
+          <Input placeholder="Key" value={row.key} onChange={(e) => update(i, 'key', e.target.value)} className="flex-1 font-mono text-sm" />
+          <Input placeholder="Value" value={row.value} onChange={(e) => update(i, 'value', e.target.value)} className="flex-1 font-mono text-sm" />
           <Button variant="ghost" size="icon" onClick={() => remove(i)} className="h-8 w-8">
             <X className="w-3.5 h-3.5 text-muted-foreground" />
           </Button>
         </div>
       ))}
       <Button variant="outline" size="sm" onClick={add} type="button">
-        <Plus className="w-3.5 h-3.5" />
-        Add row
+        <Plus className="w-3.5 h-3.5" /> Add row
       </Button>
     </div>
   );
@@ -192,101 +161,75 @@ function EditableKVTable({
 
 // ─── Secret Detail Panel ──────────────────────────────────────────────────────
 
-function SecretDetail({ kvPath, name }: { kvPath: string; name: string }) {
+function SecretDetail({ ctx, kvPath, name }: { ctx: KVCtx; kvPath: string; name: string }) {
   const fullPath = kvPath ? `${kvPath}/${name}` : name;
   const [editing, setEditing] = useState(false);
   const [editRows, setEditRows] = useState<KVRow[]>([]);
 
-  const { data: secret, isLoading, error } = useSecret(fullPath);
-  const { data: metadata } = useSecretMetadata(fullPath);
-  const writeSecret = useWriteSecret();
-  const softDelete = useSoftDeleteVersions();
-  const undelete = useUndeleteVersions();
-  const destroy = useDestroyVersions();
-  const deleteMeta = useDeleteSecretMetadata();
+  const { data: secret, isLoading, error } = useSecret(ctx, fullPath);
+  const { data: metadata } = useSecretMetadata(ctx, fullPath, !ctx.isV1);
+  const writeSecret = useWriteSecret(ctx);
+  const softDelete = useSoftDeleteVersions(ctx);
+  const undelete = useUndeleteVersions(ctx);
+  const destroy = useDestroyVersions(ctx);
+  const deleteMeta = useDeleteSecretMetadata(ctx);
 
   const startEdit = () => {
-    if (secret) {
-      setEditRows(
-        Object.entries(secret.data).map(([key, value]) => ({ key, value: String(value) }))
-      );
-    }
+    if (secret) setEditRows(Object.entries(secret.data).map(([key, value]) => ({ key, value: String(value) })));
     setEditing(true);
   };
 
-  const cancelEdit = () => setEditing(false);
-
-  const save = async () => {
+  const save = () => {
     const data = Object.fromEntries(editRows.filter((r) => r.key).map((r) => [r.key, r.value]));
-    writeSecret.mutate(
-      { path: fullPath, data },
-      {
-        onSuccess: () => {
-          toast.success('Secret saved');
-          setEditing(false);
-        },
-        onError: (err) => toast.error(err.message),
-      }
-    );
+    writeSecret.mutate({ path: fullPath, data }, {
+      onSuccess: () => { toast.success('Secret saved'); setEditing(false); },
+      onError: (err) => toast.error(err.message),
+    });
   };
 
-  if (isLoading) {
-    return (
-      <div className="p-4 space-y-3">
-        <Skeleton className="h-6 w-48" />
-        <Skeleton className="h-4 w-full" />
-        <Skeleton className="h-4 w-full" />
-        <Skeleton className="h-4 w-3/4" />
-      </div>
-    );
-  }
+  if (isLoading) return (
+    <div className="p-4 space-y-3">
+      <Skeleton className="h-6 w-48" />
+      <Skeleton className="h-4 w-full" />
+      <Skeleton className="h-4 w-full" />
+      <Skeleton className="h-4 w-3/4" />
+    </div>
+  );
 
-  if (error) {
-    return (
-      <div className="p-4">
-        <Alert variant="destructive">
-          <AlertDescription>{(error as Error).message}</AlertDescription>
-        </Alert>
-      </div>
-    );
-  }
+  if (error) return (
+    <div className="p-4">
+      <Alert variant="destructive"><AlertDescription>{(error as Error).message}</AlertDescription></Alert>
+    </div>
+  );
 
   const versions = metadata?.versions
-    ? Object.entries(metadata.versions)
-        .map(([v, info]) => ({ ...info, version: parseInt(v) }))
-        .sort((a, b) => b.version - a.version)
+    ? Object.entries(metadata.versions).map(([v, info]) => ({ ...info, version: parseInt(v) })).sort((a, b) => b.version - a.version)
     : [];
 
   return (
     <div className="flex flex-col h-full">
-      {/* Header */}
       <div className="p-4 border-b flex items-center justify-between gap-3">
         <div>
           <h3 className="font-mono font-semibold">{name}</h3>
           <p className="text-xs text-muted-foreground mt-0.5">
-            {fullPath} · v{secret?.metadata.version ?? '?'}
+            {fullPath}
+            {!ctx.isV1 && <> · v{secret?.metadata.version ?? '?'}</>}
+            {ctx.isV1 && <Badge variant="outline" className="ml-2 text-xs">KV v1</Badge>}
           </p>
         </div>
         <div className="flex items-center gap-2">
           {editing ? (
             <>
-              <Button variant="outline" size="sm" onClick={cancelEdit}>
-                Cancel
-              </Button>
+              <Button variant="outline" size="sm" onClick={() => setEditing(false)}>Cancel</Button>
               <Button size="sm" onClick={save} disabled={writeSecret.isPending}>
-                {writeSecret.isPending ? (
-                  <RotateCcw className="w-3.5 h-3.5 animate-spin" />
-                ) : (
-                  <Save className="w-3.5 h-3.5" />
-                )}
+                {writeSecret.isPending ? <RotateCcw className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
                 Save
               </Button>
             </>
           ) : (
             <>
               <Button variant="outline" size="sm" onClick={startEdit}>
-                <Edit2 className="w-3.5 h-3.5" />
-                Edit
+                <Edit2 className="w-3.5 h-3.5" /> Edit
               </Button>
               <AlertDialog>
                 <AlertDialogTrigger asChild>
@@ -298,19 +241,19 @@ function SecretDetail({ kvPath, name }: { kvPath: string; name: string }) {
                   <AlertDialogHeader>
                     <AlertDialogTitle>Delete secret?</AlertDialogTitle>
                     <AlertDialogDescription>
-                      This will permanently delete <strong>{name}</strong> and all its versions.
+                      {ctx.isV1
+                        ? <>This will permanently delete <strong>{name}</strong>.</>
+                        : <>This will permanently delete <strong>{name}</strong> and all its versions.</>}
                     </AlertDialogDescription>
                   </AlertDialogHeader>
                   <AlertDialogFooter>
                     <AlertDialogCancel>Cancel</AlertDialogCancel>
                     <AlertDialogAction
                       className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                      onClick={() => {
-                        deleteMeta.mutate(fullPath, {
-                          onSuccess: () => toast.success('Secret deleted'),
-                          onError: (err) => toast.error(err.message),
-                        });
-                      }}
+                      onClick={() => deleteMeta.mutate(fullPath, {
+                        onSuccess: () => toast.success('Secret deleted'),
+                        onError: (err) => toast.error(err.message),
+                      })}
                     >
                       Delete
                     </AlertDialogAction>
@@ -322,185 +265,147 @@ function SecretDetail({ kvPath, name }: { kvPath: string; name: string }) {
         </div>
       </div>
 
-      {/* Tabs */}
       <Tabs defaultValue="current" className="flex-1 flex flex-col overflow-hidden">
         <TabsList className="mx-4 mt-3 justify-start">
           <TabsTrigger value="current">Current</TabsTrigger>
-          <TabsTrigger value="versions">
-            Versions{' '}
-            {metadata && (
-              <span className="ml-1.5 text-xs text-muted-foreground">({versions.length})</span>
-            )}
-          </TabsTrigger>
-          <TabsTrigger value="metadata">Metadata</TabsTrigger>
+          {!ctx.isV1 && (
+            <>
+              <TabsTrigger value="versions">
+                Versions
+                {metadata && <span className="ml-1.5 text-xs text-muted-foreground">({versions.length})</span>}
+              </TabsTrigger>
+              <TabsTrigger value="metadata">Metadata</TabsTrigger>
+            </>
+          )}
         </TabsList>
 
         <TabsContent value="current" className="flex-1 overflow-auto px-4 pb-4">
           {editing ? (
             <EditableKVTable rows={editRows} onChange={setEditRows} />
           ) : secret ? (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Key</TableHead>
-                  <TableHead>Value</TableHead>
-                  <TableHead className="w-20" />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {Object.entries(secret.data).map(([k, v]) => (
-                  <SecretValueRow key={k} secretKey={k} value={String(v)} />
-                ))}
-              </TableBody>
-            </Table>
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Key</TableHead>
+                    <TableHead>Value</TableHead>
+                    <TableHead className="w-20" />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {Object.entries(secret.data).map(([k, v]) => (
+                    <SecretValueRow key={k} secretKey={k} value={String(v)} />
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
           ) : null}
         </TabsContent>
 
-        <TabsContent value="versions" className="flex-1 overflow-auto px-4 pb-4">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Version</TableHead>
-                <TableHead>Created</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead className="w-32">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {versions.map(({ version, created_time, deletion_time, destroyed }) => {
-                const isCurrent = version === metadata?.current_version;
-                const isDeleted = !!deletion_time && !destroyed;
-                return (
-                  <TableRow key={version}>
-                    <TableCell className="font-mono text-sm">
-                      v{version}
-                      {isCurrent && (
-                        <Badge variant="success" className="ml-2">
-                          current
-                        </Badge>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-sm text-muted-foreground">
-                      {relativeTime(created_time)}
-                    </TableCell>
-                    <TableCell>
-                      {destroyed ? (
-                        <Badge variant="destructive">destroyed</Badge>
-                      ) : isDeleted ? (
-                        <Badge variant="warning">deleted</Badge>
-                      ) : (
-                        <Badge variant="secondary">active</Badge>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex gap-1">
-                        {isDeleted && !destroyed && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() =>
-                              undelete.mutate(
-                                { path: fullPath, versions: [version] },
-                                { onSuccess: () => toast.success('Version undeleted') }
-                              )
-                            }
-                          >
-                            Restore
-                          </Button>
-                        )}
-                        {!destroyed && !isDeleted && !isCurrent && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() =>
-                              softDelete.mutate(
-                                { path: fullPath, versions: [version] },
-                                { onSuccess: () => toast.success('Version deleted') }
-                              )
-                            }
-                          >
-                            Delete
-                          </Button>
-                        )}
-                        {!destroyed && (
-                          <AlertDialog>
-                            <AlertDialogTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="text-destructive hover:text-destructive"
-                              >
-                                Destroy
-                              </Button>
-                            </AlertDialogTrigger>
-                            <AlertDialogContent>
-                              <AlertDialogHeader>
-                                <AlertDialogTitle>Destroy version {version}?</AlertDialogTitle>
-                                <AlertDialogDescription>
-                                  This permanently removes the data for this version. Cannot be
-                                  undone.
-                                </AlertDialogDescription>
-                              </AlertDialogHeader>
-                              <AlertDialogFooter>
-                                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                                <AlertDialogAction
-                                  className="bg-destructive text-destructive-foreground"
-                                  onClick={() =>
-                                    destroy.mutate(
-                                      { path: fullPath, versions: [version] },
-                                      { onSuccess: () => toast.success('Version destroyed') }
-                                    )
-                                  }
-                                >
-                                  Destroy
-                                </AlertDialogAction>
-                              </AlertDialogFooter>
-                            </AlertDialogContent>
-                          </AlertDialog>
-                        )}
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
-        </TabsContent>
-
-        <TabsContent value="metadata" className="flex-1 overflow-auto px-4 pb-4 space-y-3">
-          {metadata && (
-            <div className="space-y-2 text-sm">
-              <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-                <span className="text-muted-foreground">Max Versions</span>
-                <span>{metadata.max_versions || 'unlimited'}</span>
-                <span className="text-muted-foreground">CAS Required</span>
-                <span>{metadata.cas_required ? 'Yes' : 'No'}</span>
-                <span className="text-muted-foreground">Created</span>
-                <span>{relativeTime(metadata.created_time)}</span>
-                <span className="text-muted-foreground">Updated</span>
-                <span>{relativeTime(metadata.updated_time)}</span>
+        {!ctx.isV1 && (
+          <>
+            <TabsContent value="versions" className="flex-1 overflow-auto px-4 pb-4">
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Version</TableHead>
+                      <TableHead>Created</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead className="w-32">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {versions.map(({ version, created_time, deletion_time, destroyed }) => {
+                      const isCurrent = version === metadata?.current_version;
+                      const isDeleted = !!deletion_time && !destroyed;
+                      return (
+                        <TableRow key={version}>
+                          <TableCell className="font-mono text-sm">
+                            v{version}
+                            {isCurrent && <Badge variant="success" className="ml-2">current</Badge>}
+                          </TableCell>
+                          <TableCell className="text-sm text-muted-foreground">{relativeTime(created_time)}</TableCell>
+                          <TableCell>
+                            {destroyed ? <Badge variant="destructive">destroyed</Badge>
+                              : isDeleted ? <Badge variant="warning">deleted</Badge>
+                              : <Badge variant="secondary">active</Badge>}
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex gap-1">
+                              {isDeleted && !destroyed && (
+                                <Button variant="ghost" size="sm"
+                                  onClick={() => undelete.mutate({ path: fullPath, versions: [version] }, { onSuccess: () => toast.success('Version undeleted') })}>
+                                  Restore
+                                </Button>
+                              )}
+                              {!destroyed && !isDeleted && !isCurrent && (
+                                <Button variant="ghost" size="sm"
+                                  onClick={() => softDelete.mutate({ path: fullPath, versions: [version] }, { onSuccess: () => toast.success('Version deleted') })}>
+                                  Delete
+                                </Button>
+                              )}
+                              {!destroyed && (
+                                <AlertDialog>
+                                  <AlertDialogTrigger asChild>
+                                    <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive">Destroy</Button>
+                                  </AlertDialogTrigger>
+                                  <AlertDialogContent>
+                                    <AlertDialogHeader>
+                                      <AlertDialogTitle>Destroy version {version}?</AlertDialogTitle>
+                                      <AlertDialogDescription>This permanently removes the data for this version. Cannot be undone.</AlertDialogDescription>
+                                    </AlertDialogHeader>
+                                    <AlertDialogFooter>
+                                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                      <AlertDialogAction className="bg-destructive text-destructive-foreground"
+                                        onClick={() => destroy.mutate({ path: fullPath, versions: [version] }, { onSuccess: () => toast.success('Version destroyed') })}>
+                                        Destroy
+                                      </AlertDialogAction>
+                                    </AlertDialogFooter>
+                                  </AlertDialogContent>
+                                </AlertDialog>
+                              )}
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
               </div>
-              {metadata.custom_metadata &&
-                Object.keys(metadata.custom_metadata).length > 0 && (
-                  <div>
-                    <h4 className="font-medium mb-2">Custom Metadata</h4>
-                    <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-                      {Object.entries(metadata.custom_metadata).map(([k, v]) => (
-                        <>
-                          <span key={`k-${k}`} className="text-muted-foreground font-mono text-xs">
-                            {k}
-                          </span>
-                          <span key={`v-${k}`} className="font-mono text-xs">
-                            {v}
-                          </span>
-                        </>
-                      ))}
-                    </div>
+            </TabsContent>
+
+            <TabsContent value="metadata" className="flex-1 overflow-auto px-4 pb-4 space-y-3">
+              {metadata && (
+                <div className="space-y-2 text-sm">
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                    <span className="text-muted-foreground">Max Versions</span>
+                    <span>{metadata.max_versions || 'unlimited'}</span>
+                    <span className="text-muted-foreground">CAS Required</span>
+                    <span>{metadata.cas_required ? 'Yes' : 'No'}</span>
+                    <span className="text-muted-foreground">Created</span>
+                    <span>{relativeTime(metadata.created_time)}</span>
+                    <span className="text-muted-foreground">Updated</span>
+                    <span>{relativeTime(metadata.updated_time)}</span>
                   </div>
-                )}
-            </div>
-          )}
-        </TabsContent>
+                  {metadata.custom_metadata && Object.keys(metadata.custom_metadata).length > 0 && (
+                    <div>
+                      <h4 className="font-medium mb-2">Custom Metadata</h4>
+                      <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                        {Object.entries(metadata.custom_metadata).map(([k, v]) => (
+                          <>
+                            <span key={`k-${k}`} className="text-muted-foreground font-mono text-xs">{k}</span>
+                            <span key={`v-${k}`} className="font-mono text-xs">{v}</span>
+                          </>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </TabsContent>
+          </>
+        )}
       </Tabs>
     </div>
   );
@@ -511,54 +416,45 @@ function SecretDetail({ kvPath, name }: { kvPath: string; name: string }) {
 function CreateSecretDialog({
   open,
   onOpenChange,
+  ctx,
   kvPath,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
+  ctx: KVCtx;
   kvPath: string;
 }) {
   const [secretName, setSecretName] = useState('');
   const [rows, setRows] = useState<KVRow[]>([{ key: '', value: '' }]);
-  const writeSecret = useWriteSecret();
+  const writeSecret = useWriteSecret(ctx);
 
   const submit = () => {
     if (!secretName) return;
     const fullPath = kvPath ? `${kvPath}/${secretName}` : secretName;
     const data = Object.fromEntries(rows.filter((r) => r.key).map((r) => [r.key, r.value]));
-    writeSecret.mutate(
-      { path: fullPath, data },
-      {
-        onSuccess: () => {
-          toast.success('Secret created');
-          onOpenChange(false);
-          setSecretName('');
-          setRows([{ key: '', value: '' }]);
-        },
-        onError: (err) => toast.error(err.message),
-      }
-    );
+    writeSecret.mutate({ path: fullPath, data }, {
+      onSuccess: () => {
+        toast.success('Secret created');
+        onOpenChange(false);
+        setSecretName('');
+        setRows([{ key: '', value: '' }]);
+      },
+      onError: (err) => toast.error(err.message),
+    });
   };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Create Secret</DialogTitle>
-        </DialogHeader>
+        <DialogHeader><DialogTitle>Create Secret</DialogTitle></DialogHeader>
         <div className="space-y-4">
           <div className="space-y-1.5">
-            <Label>
-              Name <span className="text-destructive">*</span>
-            </Label>
-            <Input
-              placeholder="my-secret"
-              value={secretName}
-              onChange={(e) => setSecretName(e.target.value)}
-              className="font-mono"
-            />
+            <Label>Name <span className="text-destructive">*</span></Label>
+            <Input placeholder="my-secret" value={secretName}
+              onChange={(e) => setSecretName(e.target.value)} className="font-mono" />
             {kvPath && (
               <p className="text-xs text-muted-foreground">
-                Path: <span className="font-mono">{kvPath}/{secretName}</span>
+                Path: <span className="font-mono">{ctx.mount}/{kvPath}/{secretName}</span>
               </p>
             )}
           </div>
@@ -568,93 +464,133 @@ function CreateSecretDialog({
           </div>
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button onClick={submit} disabled={!secretName || writeSecret.isPending}>
-            Create
-          </Button>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button onClick={submit} disabled={!secretName || writeSecret.isPending}>Create</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
   );
 }
 
-// ─── Main Page ────────────────────────────────────────────────────────────────
+// ─── Mount picker (landing page) ──────────────────────────────────────────────
 
-export default function SecretsPage() {
-  const params = useParams();
+function MountPicker() {
   const router = useRouter();
-  const pathSegments: string[] = Array.isArray(params?.path)
-    ? params.path
-    : params?.path
-    ? [params.path as string]
-    : [];
+  const mountsQuery = useQuery({
+    queryKey: ['mounts', 'kv'],
+    queryFn: listMounts,
+  });
 
-  const kvPath = pathSegments.join('/');
+  const kvMounts = Object.entries(mountsQuery.data ?? {})
+    .filter(([, m]) => m.type === 'kv')
+    .map(([path, m]) => ({
+      path: path.replace(/\/$/, ''),
+      version: m.options?.version ?? '1',
+    }));
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center gap-3">
+        <FileKey2 className="w-6 h-6" />
+        <div>
+          <h1 className="text-2xl font-bold">Secrets</h1>
+          <p className="text-muted-foreground text-sm">Browse KV secrets engines.</p>
+        </div>
+      </div>
+
+      {mountsQuery.isLoading ? (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-20 w-full" />)}
+        </div>
+      ) : kvMounts.length === 0 ? (
+        <Card>
+          <CardContent className="pt-6 text-center text-muted-foreground py-16">
+            <Database className="w-10 h-10 opacity-30 mx-auto mb-3" />
+            <p className="text-sm">No KV secrets engines found.</p>
+            <p className="text-xs mt-1">Enable a KV engine under Secret Engines to get started.</p>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {kvMounts.map(({ path, version }) => (
+            <button
+              key={path}
+              onClick={() => router.push(`/secrets/${path}`)}
+              className="text-left border rounded-lg p-4 hover:bg-accent transition-colors"
+            >
+              <div className="flex items-center gap-2 mb-1">
+                <FileKey2 className="w-4 h-4 text-blue-500" />
+                <span className="font-mono font-medium text-sm">{path}/</span>
+                <Badge variant="outline" className="text-xs ml-auto">
+                  KV v{version}
+                </Badge>
+              </div>
+              <p className="text-xs text-muted-foreground">Click to browse secrets</p>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Browser (mount selected) ─────────────────────────────────────────────────
+
+function SecretsBrowser({ mount, pathSegs, isV1 }: { mount: string; pathSegs: string[]; isV1: boolean }) {
+  const router = useRouter();
+  const ctx: KVCtx = { mount, isV1 };
+  const kvPath = pathSegs.join('/');
+
   const [selectedSecret, setSelectedSecret] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
   const [createOpen, setCreateOpen] = useState(false);
 
-  const { data: keys, isLoading, error } = useSecretList(kvPath || '', true);
-
-  const filteredKeys = (keys ?? []).filter((k) =>
-    k.toLowerCase().includes(filter.toLowerCase())
-  );
+  const { data: keys, isLoading, error } = useSecretList(ctx, kvPath, true);
+  const filteredKeys = (keys ?? []).filter((k) => k.toLowerCase().includes(filter.toLowerCase()));
 
   const handleKeyClick = useCallback(
     (key: string) => {
       if (key.endsWith('/')) {
-        const nextPath = kvPath ? `${kvPath}/${key.slice(0, -1)}` : key.slice(0, -1);
-        router.push(`/secrets/${nextPath}`);
+        const seg = key.slice(0, -1);
+        const nextPath = kvPath ? `${kvPath}/${seg}` : seg;
+        router.push(`/secrets/${mount}/${nextPath}`);
+        setSelectedSecret(null);
       } else {
         setSelectedSecret(key);
       }
     },
-    [kvPath, router]
+    [kvPath, mount, router]
   );
 
   return (
     <div className="flex flex-col md:h-[calc(100vh-theme(spacing.12)-theme(spacing.8))]">
-      {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <div>
           <h1 className="text-2xl font-bold">Secrets</h1>
-          <SecretsBreadcrumb segments={pathSegments} />
+          <SecretsBreadcrumb mount={mount} pathSegs={pathSegs} />
         </div>
         <Button onClick={() => setCreateOpen(true)}>
-          <Plus className="w-4 h-4" />
-          Create Secret
+          <Plus className="w-4 h-4" /> Create Secret
         </Button>
       </div>
 
-      {/* Two-pane layout */}
       <div className="flex flex-col md:flex-row gap-4 md:flex-1 md:overflow-hidden">
-        {/* Left: file browser */}
-        <div className="md:w-72 border rounded-lg flex flex-col overflow-hidden md:overflow-hidden" style={{ maxHeight: '50vh' }}>
+        {/* Left pane */}
+        <div className="md:w-72 border rounded-lg flex flex-col overflow-hidden" style={{ maxHeight: '50vh' }}>
           <div className="p-3 border-b">
             <div className="relative">
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
-              <Input
-                placeholder="Filter…"
-                value={filter}
-                onChange={(e) => setFilter(e.target.value)}
-                className="pl-8 h-8 text-sm"
-              />
+              <Input placeholder="Filter…" value={filter} onChange={(e) => setFilter(e.target.value)} className="pl-8 h-8 text-sm" />
             </div>
           </div>
 
           <div className="flex-1 overflow-y-auto p-2 space-y-0.5">
             {isLoading ? (
-              Array.from({ length: 6 }).map((_, i) => (
-                <Skeleton key={i} className="h-8 w-full rounded" />
-              ))
+              Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-8 w-full rounded" />)
             ) : error ? (
               <div className="p-2">
                 <Alert variant="destructive">
-                  <AlertDescription className="text-xs">
-                    {(error as Error).message}
-                  </AlertDescription>
+                  <AlertDescription className="text-xs">{(error as Error).message}</AlertDescription>
                 </Alert>
               </div>
             ) : filteredKeys.length === 0 ? (
@@ -671,16 +607,12 @@ export default function SecretsPage() {
                     key={key}
                     onClick={() => handleKeyClick(key)}
                     className={`w-full flex items-center gap-2 px-3 py-1.5 rounded-md text-sm transition-colors text-left ${
-                      isSelected
-                        ? 'bg-accent text-accent-foreground font-medium'
-                        : 'hover:bg-muted text-foreground'
+                      isSelected ? 'bg-accent text-accent-foreground font-medium' : 'hover:bg-muted text-foreground'
                     }`}
                   >
-                    {isFolder ? (
-                      <Folder className="w-4 h-4 text-amber-500 shrink-0" />
-                    ) : (
-                      <FileKey2 className="w-4 h-4 text-blue-500 shrink-0" />
-                    )}
+                    {isFolder
+                      ? <Folder className="w-4 h-4 text-amber-500 shrink-0" />
+                      : <FileKey2 className="w-4 h-4 text-blue-500 shrink-0" />}
                     <span className="truncate font-mono text-xs">{key}</span>
                   </button>
                 );
@@ -689,10 +621,10 @@ export default function SecretsPage() {
           </div>
         </div>
 
-        {/* Right: detail panel */}
+        {/* Right pane */}
         <div className="flex-1 border rounded-lg overflow-hidden min-h-[300px]">
           {selectedSecret ? (
-            <SecretDetail kvPath={kvPath} name={selectedSecret} />
+            <SecretDetail ctx={ctx} kvPath={kvPath} name={selectedSecret} />
           ) : (
             <div className="flex flex-col items-center justify-center h-full text-center gap-3 text-muted-foreground">
               <FileKey2 className="w-12 h-12 opacity-30" />
@@ -702,11 +634,33 @@ export default function SecretsPage() {
         </div>
       </div>
 
-      <CreateSecretDialog
-        open={createOpen}
-        onOpenChange={setCreateOpen}
-        kvPath={kvPath}
-      />
+      <CreateSecretDialog open={createOpen} onOpenChange={setCreateOpen} ctx={ctx} kvPath={kvPath} />
     </div>
   );
+}
+
+// ─── Main Page ────────────────────────────────────────────────────────────────
+
+export default function SecretsPage() {
+  const params = useParams();
+  const pathSegments: string[] = Array.isArray(params?.path)
+    ? params.path
+    : params?.path ? [params.path as string] : [];
+
+  const mountsQuery = useQuery({
+    queryKey: ['mounts', 'kv'],
+    queryFn: listMounts,
+  });
+
+  // No path → show mount picker
+  if (pathSegments.length === 0) return <MountPicker />;
+
+  const mount = pathSegments[0];
+  const pathSegs = pathSegments.slice(1);
+
+  // Determine KV version from mount config
+  const mountConfig = mountsQuery.data?.[`${mount}/`];
+  const isV1 = mountConfig ? (mountConfig.options?.version ?? '2') === '1' : false;
+
+  return <SecretsBrowser mount={mount} pathSegs={pathSegs} isV1={isV1} />;
 }

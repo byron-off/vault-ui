@@ -6,6 +6,7 @@ async function handler(req: NextRequest, { params }: { params: Promise<{ path: s
   const { path } = await params;
   const vaultAddr = req.headers.get('X-Vault-Addr');
   const token = req.headers.get('X-Vault-Token');
+  const namespace = req.headers.get('X-Vault-Namespace');
 
   if (!vaultAddr) {
     return NextResponse.json({ errors: ['X-Vault-Addr header is required'] }, { status: 400 });
@@ -24,6 +25,7 @@ async function handler(req: NextRequest, { params }: { params: Promise<{ path: s
       headers: {
         'Content-Type': 'application/json',
         ...(token ? { 'X-Vault-Token': token } : {}),
+        ...(namespace ? { 'X-Vault-Namespace': namespace } : {}),
       },
       body: body || undefined,
     });

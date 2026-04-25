@@ -5,7 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
   ShieldCheck, ShieldOff, Server, Wifi, Wrench, Hash,
-  Plus, Trash2, Loader2, RefreshCw, RotateCcw, Users, Gauge, Unlock,
+  Plus, Trash2, Loader2, RefreshCw, RotateCcw, Users, Gauge, Unlock, Copy, KeyRound,
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -393,6 +393,357 @@ function ToolsTab() {
   );
 }
 
+// ─── Rekey Tab ─────────────────────────────────────────────────────────────────
+
+type RekeyStatus = {
+  started: boolean;
+  nonce?: string;
+  t?: number;
+  n?: number;
+  progress?: number;
+  required?: number;
+};
+
+function RekeySubSection({
+  title,
+  initPath,
+  updatePath,
+}: {
+  title: string;
+  initPath: string;
+  updatePath: string;
+}) {
+  const qc = useQueryClient();
+  const [shares, setShares] = useState('5');
+  const [threshold, setThreshold] = useState('3');
+  const [keyShare, setKeyShare] = useState('');
+  const [newKeys, setNewKeys] = useState<string[] | null>(null);
+
+  const statusQuery = useQuery({
+    queryKey: ['sys', 'rekey', initPath],
+    queryFn: async () => {
+      try {
+        const res = await vaultFetch<RekeyStatus>(initPath);
+        return res;
+      } catch {
+        return { started: false } as RekeyStatus;
+      }
+    },
+  });
+
+  const initMutation = useMutation({
+    mutationFn: () =>
+      vaultFetch(initPath, {
+        method: 'POST',
+        body: { secret_shares: parseInt(shares), secret_threshold: parseInt(threshold) },
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['sys', 'rekey', initPath] });
+      toast.success('Rekey initialized');
+    },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: () =>
+      vaultFetch<{ complete?: boolean; keys?: string[] }>(updatePath, {
+        method: 'PUT',
+        body: { key: keyShare, nonce: statusQuery.data?.nonce },
+      }),
+    onSuccess: (data) => {
+      setKeyShare('');
+      qc.invalidateQueries({ queryKey: ['sys', 'rekey', initPath] });
+      if (data.complete && data.keys) {
+        setNewKeys(data.keys);
+        toast.success('Rekey complete! Save your new keys.');
+      } else {
+        toast.success('Key share accepted');
+      }
+    },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  const cancelMutation = useMutation({
+    mutationFn: () => vaultFetch(initPath, { method: 'DELETE' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['sys', 'rekey', initPath] });
+      setNewKeys(null);
+      toast.success('Rekey cancelled');
+    },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  const status = statusQuery.data;
+  const inProgress = status?.started;
+
+  if (newKeys) {
+    return (
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base text-green-600 flex items-center gap-2">
+            <KeyRound className="w-4 h-4" /> {title} — Complete
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <Alert>
+            <AlertDescription className="text-sm font-medium">
+              Save these unseal keys now — they will not be shown again.
+            </AlertDescription>
+          </Alert>
+          <div className="space-y-2">
+            {newKeys.map((key, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground w-6 shrink-0">#{i + 1}</span>
+                <code className="flex-1 font-mono text-xs bg-muted px-3 py-2 rounded break-all">{key}</code>
+                <Button size="icon" variant="ghost" className="h-7 w-7 shrink-0"
+                  onClick={() => { navigator.clipboard.writeText(key); toast.success('Copied'); }}>
+                  <Copy className="w-3.5 h-3.5" />
+                </Button>
+              </div>
+            ))}
+          </div>
+          <Button variant="outline" onClick={() => setNewKeys(null)}>Done</Button>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-base">{title}</CardTitle>
+          {inProgress && (
+            <Button size="sm" variant="outline" className="text-destructive border-destructive/40"
+              onClick={() => cancelMutation.mutate()} disabled={cancelMutation.isPending}>
+              Cancel Rekey
+            </Button>
+          )}
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {statusQuery.isLoading ? (
+          <Skeleton className="h-16 w-full" />
+        ) : inProgress ? (
+          <>
+            <div className="text-sm space-y-1">
+              <p>
+                Progress:{' '}
+                <strong>{status?.progress ?? 0}</strong> /{' '}
+                <strong>{status?.required ?? status?.t}</strong> key shares submitted
+              </p>
+              <p className="font-mono text-xs text-muted-foreground">Nonce: {status?.nonce}</p>
+            </div>
+            <div className="flex gap-2">
+              <Input
+                placeholder="Enter unseal key share (base64)"
+                value={keyShare}
+                onChange={(e) => setKeyShare(e.target.value)}
+                className="font-mono text-xs"
+              />
+              <Button onClick={() => updateMutation.mutate()}
+                disabled={!keyShare || updateMutation.isPending}>
+                Submit
+              </Button>
+            </div>
+          </>
+        ) : (
+          <>
+            <Alert>
+              <AlertDescription className="text-sm">
+                Rekeying generates a new set of unseal keys with a new threshold. You need the
+                current threshold of key shares to complete the process.
+              </AlertDescription>
+            </Alert>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label>Key Shares (n) <span className="text-destructive">*</span></Label>
+                <Input type="number" min={1} value={shares}
+                  onChange={(e) => setShares(e.target.value)} />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Key Threshold (t) <span className="text-destructive">*</span></Label>
+                <Input type="number" min={1} value={threshold}
+                  onChange={(e) => setThreshold(e.target.value)} />
+              </div>
+            </div>
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button disabled={initMutation.isPending}>Initialize Rekey</Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Initialize rekey?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    This will start a rekey operation requiring {threshold} of {shares} new key
+                    shares. You will need the current unseal keys to complete it.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction onClick={() => initMutation.mutate()}>
+                    Initialize
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function RekeyTab() {
+  return (
+    <div className="space-y-4 max-w-lg">
+      <RekeySubSection
+        title="Barrier Key Rekey"
+        initPath="/sys/rekey/init"
+        updatePath="/sys/rekey/update"
+      />
+      <RekeySubSection
+        title="Recovery Key Rekey"
+        initPath="/sys/rekey-recovery-key/init"
+        updatePath="/sys/rekey-recovery-key/update"
+      />
+    </div>
+  );
+}
+
+// ─── Logging Tab ───────────────────────────────────────────────────────────────
+
+const LOG_LEVELS = ['trace', 'debug', 'info', 'warn', 'error'] as const;
+
+function LoggingTab() {
+  const qc = useQueryClient();
+
+  const loggersQuery = useQuery({
+    queryKey: ['sys', 'loggers'],
+    queryFn: async () => {
+      const res = await vaultFetch<{ data: Record<string, { level: string }> }>('/sys/loggers');
+      return res.data;
+    },
+  });
+
+  const setLevelMutation = useMutation({
+    mutationFn: ({ name, level }: { name: string; level: string }) =>
+      vaultFetch(`/sys/loggers/${name}`, { method: 'POST', body: { level } }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['sys', 'loggers'] });
+      toast.success('Log level updated');
+    },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  const resetMutation = useMutation({
+    mutationFn: (name: string) => vaultFetch(`/sys/loggers/${name}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['sys', 'loggers'] });
+      toast.success('Logger reset to default');
+    },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  const setAllMutation = useMutation({
+    mutationFn: (level: string) =>
+      vaultFetch('/sys/loggers', { method: 'POST', body: { level } }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['sys', 'loggers'] });
+      toast.success('All loggers updated');
+    },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  const resetAllMutation = useMutation({
+    mutationFn: () => vaultFetch('/sys/loggers', { method: 'DELETE' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['sys', 'loggers'] });
+      toast.success('All loggers reset to defaults');
+    },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  const loggers = loggersQuery.data ? Object.entries(loggersQuery.data) : [];
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <h3 className="font-medium text-sm">Log Levels</h3>
+        <div className="flex gap-2">
+          <Select onValueChange={(v) => setAllMutation.mutate(v)}>
+            <SelectTrigger className="w-36 h-8 text-xs">
+              <SelectValue placeholder="Set all to…" />
+            </SelectTrigger>
+            <SelectContent>
+              {LOG_LEVELS.map((l) => (
+                <SelectItem key={l} value={l} className="text-xs">{l}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Button size="sm" variant="outline" onClick={() => resetAllMutation.mutate()}
+            disabled={resetAllMutation.isPending}>
+            Reset All
+          </Button>
+        </div>
+      </div>
+
+      {loggersQuery.isLoading ? (
+        <div className="space-y-2">
+          {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}
+        </div>
+      ) : loggersQuery.error ? (
+        <p className="text-sm text-destructive text-center py-8">
+          {(loggersQuery.error as Error).message}
+        </p>
+      ) : loggers.length === 0 ? (
+        <p className="text-sm text-muted-foreground text-center py-8">No loggers available</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Logger</TableHead>
+                <TableHead className="w-36">Level</TableHead>
+                <TableHead className="w-20">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loggers.map(([name, info]) => (
+                <TableRow key={name}>
+                  <TableCell className="font-mono text-sm">{name}</TableCell>
+                  <TableCell>
+                    <Select
+                      value={info.level?.toLowerCase()}
+                      onValueChange={(v) => setLevelMutation.mutate({ name, level: v })}
+                    >
+                      <SelectTrigger className="h-7 text-xs w-28">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {LOG_LEVELS.map((l) => (
+                          <SelectItem key={l} value={l} className="text-xs">{l}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </TableCell>
+                  <TableCell>
+                    <Button size="sm" variant="ghost" className="h-7 text-xs"
+                      onClick={() => resetMutation.mutate(name)}
+                      disabled={resetMutation.isPending}>
+                      Reset
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Rotate Tab ────────────────────────────────────────────────────────────────
 
 function RotateTab() {
@@ -773,6 +1124,231 @@ function LockedUsersTab() {
   );
 }
 
+// ─── Request Headers Tab ───────────────────────────────────────────────────────
+
+function RequestHeadersTab() {
+  const qc = useQueryClient();
+  const [newHeader, setNewHeader] = useState('');
+  const [newValues, setNewValues] = useState('');
+
+  const headersQuery = useQuery({
+    queryKey: ['sys', 'ui-headers'],
+    queryFn: async () => {
+      try {
+        const res = await vaultFetch<{ data: { keys: string[] } }>(
+          '/sys/config/ui/headers', { method: 'LIST' }
+        );
+        return res.data.keys ?? [];
+      } catch {
+        return [] as string[];
+      }
+    },
+  });
+
+  const headerDetailQueries = useQuery({
+    queryKey: ['sys', 'ui-headers', 'details', headersQuery.data],
+    queryFn: async () => {
+      if (!headersQuery.data?.length) return {} as Record<string, string[]>;
+      const entries = await Promise.allSettled(
+        headersQuery.data.map(async (h) => {
+          const res = await vaultFetch<{ value: string[] }>(`/sys/config/ui/headers/${h}`);
+          return [h, res.value ?? []] as const;
+        })
+      );
+      return Object.fromEntries(entries.flatMap((r) => (r.status === 'fulfilled' ? [r.value] : [])));
+    },
+    enabled: (headersQuery.data?.length ?? 0) > 0,
+  });
+
+  const addMutation = useMutation({
+    mutationFn: () =>
+      vaultFetch(`/sys/config/ui/headers/${newHeader.trim()}`, {
+        method: 'POST',
+        body: { values: newValues.split(',').map((v) => v.trim()).filter(Boolean) },
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['sys', 'ui-headers'] });
+      setNewHeader('');
+      setNewValues('');
+      toast.success('Header added');
+    },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (name: string) =>
+      vaultFetch(`/sys/config/ui/headers/${name}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['sys', 'ui-headers'] });
+      toast.success('Header removed');
+    },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  const headers = headersQuery.data ?? [];
+  const details = headerDetailQueries.data ?? {};
+
+  return (
+    <div className="space-y-4 max-w-2xl">
+      <p className="text-sm text-muted-foreground">
+        Custom headers returned with every UI response.
+      </p>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm">Add Header</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label>Header Name <span className="text-destructive">*</span></Label>
+              <Input placeholder="X-Custom-Header" value={newHeader}
+                onChange={(e) => setNewHeader(e.target.value)} />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Values (comma-separated)</Label>
+              <Input placeholder="value1, value2" value={newValues}
+                onChange={(e) => setNewValues(e.target.value)} />
+            </div>
+          </div>
+          <Button onClick={() => addMutation.mutate()}
+            disabled={!newHeader.trim() || addMutation.isPending}>
+            Add Header
+          </Button>
+        </CardContent>
+      </Card>
+
+      {headersQuery.isLoading ? (
+        <Skeleton className="h-24 w-full" />
+      ) : headers.length === 0 ? (
+        <p className="text-sm text-muted-foreground text-center py-6">No custom headers configured</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Header</TableHead>
+                <TableHead>Values</TableHead>
+                <TableHead className="w-16">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {headers.map((h) => (
+                <TableRow key={h}>
+                  <TableCell className="font-mono text-sm">{h}</TableCell>
+                  <TableCell className="text-sm text-muted-foreground">
+                    {(details[h] ?? []).join(', ') || '—'}
+                  </TableCell>
+                  <TableCell>
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <Button variant="ghost" size="icon"
+                          className="h-8 w-8 text-destructive hover:text-destructive">
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Remove header?</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            The header <strong>{h}</strong> will no longer be sent.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Cancel</AlertDialogCancel>
+                          <AlertDialogAction className="bg-destructive text-destructive-foreground"
+                            onClick={() => deleteMutation.mutate(h)}>Remove</AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Plugins Tab ────────────────────────────────────────────────────────────────
+
+type PluginEntry = { name: string; version?: string; builtin?: boolean };
+
+function PluginsTab() {
+  const pluginsQuery = useQuery({
+    queryKey: ['sys', 'plugins'],
+    queryFn: async () => {
+      const res = await vaultFetch<{
+        data: {
+          auth: PluginEntry[];
+          secret: PluginEntry[];
+          database: PluginEntry[];
+        };
+      }>('/sys/plugins/catalog');
+      return res.data;
+    },
+  });
+
+  const allPlugins: Array<PluginEntry & { category: string }> = [
+    ...(pluginsQuery.data?.auth ?? []).map((p) => ({ ...p, category: 'auth' })),
+    ...(pluginsQuery.data?.secret ?? []).map((p) => ({ ...p, category: 'secret' })),
+    ...(pluginsQuery.data?.database ?? []).map((p) => ({ ...p, category: 'database' })),
+  ];
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-muted-foreground">
+          {allPlugins.length > 0 && `${allPlugins.length} plugins registered`}
+        </p>
+        <Button size="sm" variant="outline"
+          onClick={() => pluginsQuery.refetch()}>
+          <RefreshCw className="w-3.5 h-3.5 mr-1" /> Refresh
+        </Button>
+      </div>
+
+      {pluginsQuery.isLoading ? (
+        <div className="space-y-2">
+          {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}
+        </div>
+      ) : pluginsQuery.error ? (
+        <p className="text-sm text-destructive text-center py-8">
+          {(pluginsQuery.error as Error).message}
+        </p>
+      ) : (
+        <div className="overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Name</TableHead>
+                <TableHead>Type</TableHead>
+                <TableHead>Version</TableHead>
+                <TableHead>Builtin</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {allPlugins.map((p) => (
+                <TableRow key={`${p.category}-${p.name}`}>
+                  <TableCell className="font-mono text-sm">{p.name}</TableCell>
+                  <TableCell><Badge variant="outline" className="text-xs">{p.category}</Badge></TableCell>
+                  <TableCell className="text-sm text-muted-foreground">{p.version ?? '—'}</TableCell>
+                  <TableCell>
+                    {p.builtin
+                      ? <Badge variant="secondary" className="text-xs">builtin</Badge>
+                      : <Badge variant="outline" className="text-xs">external</Badge>}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Page ──────────────────────────────────────────────────────────────────────
 
 export default function SystemPage() {
@@ -792,16 +1368,24 @@ export default function SystemPage() {
           <TabsTrigger value="cors">CORS</TabsTrigger>
           <TabsTrigger value="tools">Tools</TabsTrigger>
           <TabsTrigger value="rotate">Key Rotation</TabsTrigger>
+          <TabsTrigger value="rekey">Rekey</TabsTrigger>
+          <TabsTrigger value="logging">Logging</TabsTrigger>
           <TabsTrigger value="quotas"><Gauge className="w-3.5 h-3.5 mr-1" />Quotas</TabsTrigger>
           <TabsTrigger value="locked-users"><Users className="w-3.5 h-3.5 mr-1" />Locked Users</TabsTrigger>
+          <TabsTrigger value="headers">Request Headers</TabsTrigger>
+          <TabsTrigger value="plugins">Plugins</TabsTrigger>
         </TabsList>
         <TabsContent value="status" className="mt-4"><StatusTab /></TabsContent>
         <TabsContent value="audit" className="mt-4"><AuditTab /></TabsContent>
         <TabsContent value="cors" className="mt-4"><CORSTab /></TabsContent>
         <TabsContent value="tools" className="mt-4"><ToolsTab /></TabsContent>
         <TabsContent value="rotate" className="mt-4"><RotateTab /></TabsContent>
+        <TabsContent value="rekey" className="mt-4"><RekeyTab /></TabsContent>
+        <TabsContent value="logging" className="mt-4"><LoggingTab /></TabsContent>
         <TabsContent value="quotas" className="mt-4"><QuotasTab /></TabsContent>
         <TabsContent value="locked-users" className="mt-4"><LockedUsersTab /></TabsContent>
+        <TabsContent value="headers" className="mt-4"><RequestHeadersTab /></TabsContent>
+        <TabsContent value="plugins" className="mt-4"><PluginsTab /></TabsContent>
       </Tabs>
     </div>
   );

@@ -54,7 +54,7 @@ async function doFetch<T>(
     method: httpMethod,
     headers: {
       'Content-Type': 'application/json',
-      'X-Vault-Token': token,
+      ...(token ? { 'X-Vault-Token': token } : {}),
       ...extraHeaders,
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -65,22 +65,22 @@ async function doFetch<T>(
 export async function vaultFetch<T>(path: string, opts: VaultRequestOptions = {}): Promise<T> {
   const { method = 'GET', body, query } = opts;
   const store = useConnectionStore.getState();
-  const { addr, token } = store;
+  const { addr, token, namespace } = store;
 
   if (!addr || !token) {
     throw new VaultError(401, ['Not connected']);
   }
 
   const effectiveQuery = method === 'LIST' ? { ...query, list: true } : query;
+  const nsHeaders: Record<string, string> = namespace ? { 'X-Vault-Namespace': namespace } : {};
 
   try {
     const url = buildUrl(addr, path, effectiveQuery);
-    return await doFetch<T>(url, method, token, body);
+    return await doFetch<T>(url, method, token, body, nsHeaders);
   } catch (err) {
     if (err instanceof VaultError) throw err;
 
     // CORS or network error — fall back to proxy
-    const proxyUrl = buildUrl('', `/api/proxy${path}`, effectiveQuery).replace('http:///api', '/api').replace('https:///api', '/api');
     const normalizedPath = path.startsWith('/') ? path : `/${path}`;
     let proxyUrlStr = `/api/proxy${normalizedPath}`;
     if (effectiveQuery) {
@@ -90,9 +90,9 @@ export async function vaultFetch<T>(path: string, opts: VaultRequestOptions = {}
       }
       proxyUrlStr += `?${params.toString()}`;
     }
-    void proxyUrl;
     return await doFetch<T>(proxyUrlStr, method, token, body, {
       'X-Vault-Addr': addr,
+      ...nsHeaders,
     });
   }
 }
@@ -101,13 +101,15 @@ export async function vaultFetchDirect<T>(
   addr: string,
   token: string,
   path: string,
-  opts: VaultRequestOptions = {}
+  opts: VaultRequestOptions = {},
+  namespace?: string
 ): Promise<T> {
   const { method = 'GET', body, query } = opts;
   const effectiveQuery = method === 'LIST' ? { ...query, list: true } : query;
+  const nsHeaders: Record<string, string> = namespace ? { 'X-Vault-Namespace': namespace } : {};
   const url = buildUrl(addr, path, effectiveQuery);
   try {
-    return await doFetch<T>(url, method, token, body);
+    return await doFetch<T>(url, method, token, body, nsHeaders);
   } catch (err) {
     if (err instanceof VaultError) throw err;
     // Fallback to proxy
@@ -122,6 +124,7 @@ export async function vaultFetchDirect<T>(
     }
     return await doFetch<T>(proxyUrlStr, method, token, body, {
       'X-Vault-Addr': addr,
+      ...nsHeaders,
     });
   }
 }

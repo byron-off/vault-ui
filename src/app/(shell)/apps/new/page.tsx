@@ -27,6 +27,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 
 import { writeAclPolicy, deleteAclPolicy } from '@/lib/vault/api/policies';
 import { writeSecret } from '@/lib/vault/api/secrets';
+const KV_V2_CTX = { mount: 'secret', isV1: false };
 import { createAppRole, getRoleId, generateSecretId, deleteAppRole } from '@/lib/vault/api/approle';
 import { saveApplication } from '@/lib/vault/api/apps';
 import { useConnectionStore } from '@/lib/store';
@@ -264,7 +265,7 @@ export default function NewAppPage() {
       if (validRows.length > 0) {
         await runOp(ops[opIdx].label, () => {
           const data = Object.fromEntries(validRows.map((r) => [r.key, r.value]));
-          return writeSecret(kvPath, data).then(() => undefined);
+          return writeSecret(KV_V2_CTX, kvPath, data).then(() => undefined);
         });
       }
 
