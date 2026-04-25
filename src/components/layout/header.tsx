@@ -6,7 +6,7 @@ import { formatTTL } from '@/lib/utils';
 import { useTheme } from '@/hooks/use-theme';
 
 export function Header({ onMenuClick }: { onMenuClick: () => void }) {
-  const { tokenInfo } = useConnectionStore();
+  const { tokenInfo, namespace } = useConnectionStore();
   const { theme, toggle } = useTheme();
 
   return (
@@ -29,6 +29,12 @@ export function Header({ onMenuClick }: { onMenuClick: () => void }) {
       >
         {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
       </button>
+
+      {namespace && (
+        <span className="hidden sm:inline text-xs font-mono px-1.5 py-0.5 rounded bg-muted text-muted-foreground border">
+          {namespace}
+        </span>
+      )}
 
       {tokenInfo && (
         <div className="flex items-center gap-2 text-xs text-muted-foreground">

@@ -2,10 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useForm } from 'react-hook-form';
-import { zodResolver } from '@hookform/resolvers/zod';
-import { z } from 'zod';
-import { KeyRound, Eye, EyeOff, Loader2 } from 'lucide-react';
+import { KeyRound, Eye, EyeOff, Loader2, ChevronDown, ChevronUp } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
@@ -13,78 +10,115 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 
 import { useConnectionStore } from '@/lib/store';
 import { vaultFetchDirect } from '@/lib/vault/client';
 import { VaultError } from '@/lib/vault/errors';
 
-const schema = z.object({
-  addr: z.string().url({ message: 'Must be a valid URL (e.g. https://bao.example.com)' }),
-  token: z.string().min(1, 'Token is required'),
-});
+type Method = 'token' | 'userpass' | 'ldap';
 
-type FormValues = z.infer<typeof schema>;
+type TokenInfo = {
+  accessor: string;
+  policies: string[];
+  ttl: number;
+  renewable: boolean;
+  display_name: string;
+  entity_id: string;
+  expire_time: string | null;
+};
 
 export default function LoginPage() {
   const router = useRouter();
   const { setConnection, recentAddrs } = useConnectionStore();
+
+  const [addr, setAddr] = useState('');
+  const [namespace, setNamespace] = useState('');
+  const [showNs, setShowNs] = useState(false);
+  const [method, setMethod] = useState<Method>('token');
+
+  // Token method
+  const [token, setToken] = useState('');
   const [showToken, setShowToken] = useState(false);
+
+  // Userpass / LDAP method
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [mountPath, setMountPath] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const {
-    register,
-    handleSubmit,
-    setValue,
-    watch,
-    formState: { errors },
-  } = useForm<FormValues>({
-    resolver: zodResolver(schema),
-    defaultValues: { addr: '', token: '' },
-  });
+  const ns = namespace.trim().replace(/^\/+|\/+$/g, '');
 
-  const addrValue = watch('addr');
+  const acquireToken = async (serverAddr: string): Promise<string> => {
+    if (method === 'token') {
+      if (!token.trim()) throw new Error('Token is required');
+      return token.trim();
+    }
 
-  const onSubmit = async (data: FormValues) => {
+    const user = username.trim();
+    if (!user) throw new Error('Username is required');
+    if (!password) throw new Error('Password is required');
+
+    const defaultMount = method === 'userpass' ? 'userpass' : 'ldap';
+    const mount = mountPath.trim() || defaultMount;
+
+    const res = await vaultFetchDirect<{ auth: { client_token: string } }>(
+      serverAddr,
+      '',
+      `/auth/${mount}/login/${encodeURIComponent(user)}`,
+      { method: 'POST', body: { password } },
+      ns || undefined
+    );
+    return res.auth.client_token;
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
     setError(null);
-    setLoading(true);
 
+    const serverAddr = addr.trim().replace(/\/+$/, '');
+    if (!serverAddr) { setError('Vault address is required'); return; }
+
+    try { new URL(serverAddr); } catch {
+      setError('Must be a valid URL (e.g. https://bao.example.com)');
+      return;
+    }
+
+    setLoading(true);
     try {
-      // Step 1: Check reachability
+      // Check reachability
       try {
-        const healthRes = await fetch(`${data.addr}/v1/sys/health`);
-        if (!healthRes.ok && healthRes.status !== 429 && healthRes.status !== 472 && healthRes.status !== 473) {
-          // 429/472/473 are valid OpenBao health states (standby, etc.)
-        }
+        await fetch(`${serverAddr}/v1/sys/health`);
       } catch {
         setError('Cannot reach the Vault server. Check the address and your network.');
-        setLoading(false);
         return;
       }
 
-      // Step 2: Validate token
-      const tokenInfo = await vaultFetchDirect<{
-        data: {
-          accessor: string;
-          policies: string[];
-          ttl: number;
-          renewable: boolean;
-          display_name: string;
-          entity_id: string;
-          expire_time: string | null;
-        };
-      }>(data.addr, data.token, '/auth/token/lookup-self');
+      const clientToken = await acquireToken(serverAddr);
 
-      setConnection(data.addr, data.token, tokenInfo.data);
+      const tokenInfo = await vaultFetchDirect<{ data: TokenInfo }>(
+        serverAddr,
+        clientToken,
+        '/auth/token/lookup-self',
+        {},
+        ns || undefined
+      );
+
+      setConnection(serverAddr, clientToken, tokenInfo.data, ns || undefined);
       toast.success('Connected successfully');
       router.replace('/dashboard');
     } catch (err) {
       if (err instanceof VaultError) {
-        if (err.status === 403) {
-          setError('Permission denied. Invalid or expired token.');
+        if (err.status === 400 || err.status === 403) {
+          setError('Authentication failed. Check your credentials.');
         } else {
           setError(err.errors[0] || 'Authentication failed');
         }
+      } else if (err instanceof Error) {
+        setError(err.message);
       } else {
         setError('Connection failed. Check the address and try again.');
       }
@@ -96,7 +130,6 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-muted/30 p-4">
       <div className="w-full max-w-md">
-        {/* Header */}
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-primary mb-4">
             <KeyRound className="w-6 h-6 text-primary-foreground" />
@@ -108,10 +141,11 @@ export default function LoginPage() {
         <Card>
           <CardHeader>
             <CardTitle className="text-lg">Connect</CardTitle>
-            <CardDescription>Enter your Vault address and token to continue.</CardDescription>
+            <CardDescription>Enter your Vault address and authenticate to continue.</CardDescription>
           </CardHeader>
           <CardContent>
-            <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+            <form onSubmit={handleSubmit} className="space-y-4">
+              {/* Server address */}
               <div className="space-y-1.5">
                 <Label htmlFor="addr">
                   Vault Address <span className="text-destructive">*</span>
@@ -120,22 +154,19 @@ export default function LoginPage() {
                   id="addr"
                   type="url"
                   placeholder="https://bao.example.com"
-                  {...register('addr')}
+                  value={addr}
+                  onChange={(e) => setAddr(e.target.value)}
                   disabled={loading}
                 />
-                {errors.addr && (
-                  <p className="text-xs text-destructive">{errors.addr.message}</p>
-                )}
-                {/* Recent connections */}
                 {recentAddrs.length > 0 && (
                   <div className="flex flex-wrap gap-1.5 pt-1">
                     {recentAddrs.map((a) => (
                       <button
                         key={a}
                         type="button"
-                        onClick={() => setValue('addr', a)}
+                        onClick={() => setAddr(a)}
                         className={`text-xs px-2 py-1 rounded border transition-colors ${
-                          addrValue === a
+                          addr === a
                             ? 'border-primary bg-primary/10 text-primary'
                             : 'border-border hover:border-primary hover:bg-muted'
                         }`}
@@ -147,32 +178,96 @@ export default function LoginPage() {
                 )}
               </div>
 
-              <div className="space-y-1.5">
-                <Label htmlFor="token">
-                  Token <span className="text-destructive">*</span>
-                </Label>
-                <div className="relative">
-                  <Input
-                    id="token"
-                    type={showToken ? 'text' : 'password'}
-                    placeholder="hvs.CAESIB..."
-                    {...register('token')}
-                    disabled={loading}
-                    className="pr-9 font-mono text-xs"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowToken((v) => !v)}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                    tabIndex={-1}
-                  >
-                    {showToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </button>
-                </div>
-                {errors.token && (
-                  <p className="text-xs text-destructive">{errors.token.message}</p>
+              {/* Namespace — collapsible */}
+              <div>
+                <button
+                  type="button"
+                  className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+                  onClick={() => setShowNs((v) => !v)}
+                >
+                  {showNs ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                  Namespace (optional)
+                </button>
+                {showNs && (
+                  <div className="mt-2 space-y-1.5">
+                    <Input
+                      id="namespace"
+                      placeholder="admin/team-a"
+                      value={namespace}
+                      onChange={(e) => setNamespace(e.target.value)}
+                      disabled={loading}
+                      className="font-mono text-sm"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Leave empty to use the root namespace.
+                    </p>
+                  </div>
                 )}
               </div>
+
+              {/* Auth method */}
+              <Tabs value={method} onValueChange={(v) => setMethod(v as Method)}>
+                <TabsList className="w-full">
+                  <TabsTrigger value="token" className="flex-1">Token</TabsTrigger>
+                  <TabsTrigger value="userpass" className="flex-1">Userpass</TabsTrigger>
+                  <TabsTrigger value="ldap" className="flex-1">LDAP</TabsTrigger>
+                </TabsList>
+
+                <TabsContent value="token" className="mt-4 space-y-1.5">
+                  <Label htmlFor="token">
+                    Token <span className="text-destructive">*</span>
+                  </Label>
+                  <div className="relative">
+                    <Input
+                      id="token"
+                      type={showToken ? 'text' : 'password'}
+                      placeholder="hvs.CAESIB..."
+                      value={token}
+                      onChange={(e) => setToken(e.target.value)}
+                      disabled={loading}
+                      className="pr-9 font-mono text-xs"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowToken((v) => !v)}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                      tabIndex={-1}
+                    >
+                      {showToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </TabsContent>
+
+                <TabsContent value="userpass" className="mt-4 space-y-3">
+                  <CredentialFields
+                    username={username}
+                    password={password}
+                    mountPath={mountPath}
+                    defaultMount="userpass"
+                    showPassword={showPassword}
+                    loading={loading}
+                    onUsername={setUsername}
+                    onPassword={setPassword}
+                    onMountPath={setMountPath}
+                    onShowPassword={setShowPassword}
+                  />
+                </TabsContent>
+
+                <TabsContent value="ldap" className="mt-4 space-y-3">
+                  <CredentialFields
+                    username={username}
+                    password={password}
+                    mountPath={mountPath}
+                    defaultMount="ldap"
+                    showPassword={showPassword}
+                    loading={loading}
+                    onUsername={setUsername}
+                    onPassword={setPassword}
+                    onMountPath={setMountPath}
+                    onShowPassword={setShowPassword}
+                  />
+                </TabsContent>
+              </Tabs>
 
               {error && (
                 <Alert variant="destructive">
@@ -197,5 +292,68 @@ export default function LoginPage() {
         </Card>
       </div>
     </div>
+  );
+}
+
+function CredentialFields({
+  username, password, mountPath, defaultMount,
+  showPassword, loading,
+  onUsername, onPassword, onMountPath, onShowPassword,
+}: {
+  username: string; password: string; mountPath: string; defaultMount: string;
+  showPassword: boolean; loading: boolean;
+  onUsername: (v: string) => void; onPassword: (v: string) => void;
+  onMountPath: (v: string) => void; onShowPassword: (v: (p: boolean) => boolean) => void;
+}) {
+  return (
+    <>
+      <div className="space-y-1.5">
+        <Label htmlFor="username">Username <span className="text-destructive">*</span></Label>
+        <Input
+          id="username"
+          placeholder="alice"
+          value={username}
+          onChange={(e) => onUsername(e.target.value)}
+          disabled={loading}
+          autoComplete="username"
+        />
+      </div>
+      <div className="space-y-1.5">
+        <Label htmlFor="password">Password <span className="text-destructive">*</span></Label>
+        <div className="relative">
+          <Input
+            id="password"
+            type={showPassword ? 'text' : 'password'}
+            placeholder="••••••••"
+            value={password}
+            onChange={(e) => onPassword(e.target.value)}
+            disabled={loading}
+            autoComplete="current-password"
+            className="pr-9"
+          />
+          <button
+            type="button"
+            onClick={() => onShowPassword((v) => !v)}
+            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+            tabIndex={-1}
+          >
+            {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+          </button>
+        </div>
+      </div>
+      <div className="space-y-1.5">
+        <Label htmlFor="mount" className="text-xs text-muted-foreground">
+          Mount path (default: auth/{defaultMount}/)
+        </Label>
+        <Input
+          id="mount"
+          placeholder={defaultMount}
+          value={mountPath}
+          onChange={(e) => onMountPath(e.target.value)}
+          disabled={loading}
+          className="font-mono text-sm"
+        />
+      </div>
+    </>
   );
 }
