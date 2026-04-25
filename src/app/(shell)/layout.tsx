@@ -5,11 +5,13 @@ import { useRouter } from 'next/navigation';
 import { Sidebar } from '@/components/layout/sidebar';
 import { Header } from '@/components/layout/header';
 import { useConnectionStore } from '@/lib/store';
+import { useTokenRenewal } from '@/hooks/use-token-renewal';
 
 export default function ShellLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const { addr, token } = useConnectionStore();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  useTokenRenewal();
 
   useEffect(() => {
     if (!addr || !token) {

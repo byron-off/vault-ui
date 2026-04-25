@@ -1124,6 +1124,231 @@ function LockedUsersTab() {
   );
 }
 
+// ─── Request Headers Tab ───────────────────────────────────────────────────────
+
+function RequestHeadersTab() {
+  const qc = useQueryClient();
+  const [newHeader, setNewHeader] = useState('');
+  const [newValues, setNewValues] = useState('');
+
+  const headersQuery = useQuery({
+    queryKey: ['sys', 'ui-headers'],
+    queryFn: async () => {
+      try {
+        const res = await vaultFetch<{ data: { keys: string[] } }>(
+          '/sys/config/ui/headers', { method: 'LIST' }
+        );
+        return res.data.keys ?? [];
+      } catch {
+        return [] as string[];
+      }
+    },
+  });
+
+  const headerDetailQueries = useQuery({
+    queryKey: ['sys', 'ui-headers', 'details', headersQuery.data],
+    queryFn: async () => {
+      if (!headersQuery.data?.length) return {} as Record<string, string[]>;
+      const entries = await Promise.allSettled(
+        headersQuery.data.map(async (h) => {
+          const res = await vaultFetch<{ value: string[] }>(`/sys/config/ui/headers/${h}`);
+          return [h, res.value ?? []] as const;
+        })
+      );
+      return Object.fromEntries(entries.flatMap((r) => (r.status === 'fulfilled' ? [r.value] : [])));
+    },
+    enabled: (headersQuery.data?.length ?? 0) > 0,
+  });
+
+  const addMutation = useMutation({
+    mutationFn: () =>
+      vaultFetch(`/sys/config/ui/headers/${newHeader.trim()}`, {
+        method: 'POST',
+        body: { values: newValues.split(',').map((v) => v.trim()).filter(Boolean) },
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['sys', 'ui-headers'] });
+      setNewHeader('');
+      setNewValues('');
+      toast.success('Header added');
+    },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (name: string) =>
+      vaultFetch(`/sys/config/ui/headers/${name}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['sys', 'ui-headers'] });
+      toast.success('Header removed');
+    },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  const headers = headersQuery.data ?? [];
+  const details = headerDetailQueries.data ?? {};
+
+  return (
+    <div className="space-y-4 max-w-2xl">
+      <p className="text-sm text-muted-foreground">
+        Custom headers returned with every UI response.
+      </p>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm">Add Header</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label>Header Name <span className="text-destructive">*</span></Label>
+              <Input placeholder="X-Custom-Header" value={newHeader}
+                onChange={(e) => setNewHeader(e.target.value)} />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Values (comma-separated)</Label>
+              <Input placeholder="value1, value2" value={newValues}
+                onChange={(e) => setNewValues(e.target.value)} />
+            </div>
+          </div>
+          <Button onClick={() => addMutation.mutate()}
+            disabled={!newHeader.trim() || addMutation.isPending}>
+            Add Header
+          </Button>
+        </CardContent>
+      </Card>
+
+      {headersQuery.isLoading ? (
+        <Skeleton className="h-24 w-full" />
+      ) : headers.length === 0 ? (
+        <p className="text-sm text-muted-foreground text-center py-6">No custom headers configured</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Header</TableHead>
+                <TableHead>Values</TableHead>
+                <TableHead className="w-16">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {headers.map((h) => (
+                <TableRow key={h}>
+                  <TableCell className="font-mono text-sm">{h}</TableCell>
+                  <TableCell className="text-sm text-muted-foreground">
+                    {(details[h] ?? []).join(', ') || '—'}
+                  </TableCell>
+                  <TableCell>
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <Button variant="ghost" size="icon"
+                          className="h-8 w-8 text-destructive hover:text-destructive">
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Remove header?</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            The header <strong>{h}</strong> will no longer be sent.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Cancel</AlertDialogCancel>
+                          <AlertDialogAction className="bg-destructive text-destructive-foreground"
+                            onClick={() => deleteMutation.mutate(h)}>Remove</AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Plugins Tab ────────────────────────────────────────────────────────────────
+
+type PluginEntry = { name: string; version?: string; builtin?: boolean };
+
+function PluginsTab() {
+  const pluginsQuery = useQuery({
+    queryKey: ['sys', 'plugins'],
+    queryFn: async () => {
+      const res = await vaultFetch<{
+        data: {
+          auth: PluginEntry[];
+          secret: PluginEntry[];
+          database: PluginEntry[];
+        };
+      }>('/sys/plugins/catalog');
+      return res.data;
+    },
+  });
+
+  const allPlugins: Array<PluginEntry & { category: string }> = [
+    ...(pluginsQuery.data?.auth ?? []).map((p) => ({ ...p, category: 'auth' })),
+    ...(pluginsQuery.data?.secret ?? []).map((p) => ({ ...p, category: 'secret' })),
+    ...(pluginsQuery.data?.database ?? []).map((p) => ({ ...p, category: 'database' })),
+  ];
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-muted-foreground">
+          {allPlugins.length > 0 && `${allPlugins.length} plugins registered`}
+        </p>
+        <Button size="sm" variant="outline"
+          onClick={() => pluginsQuery.refetch()}>
+          <RefreshCw className="w-3.5 h-3.5 mr-1" /> Refresh
+        </Button>
+      </div>
+
+      {pluginsQuery.isLoading ? (
+        <div className="space-y-2">
+          {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}
+        </div>
+      ) : pluginsQuery.error ? (
+        <p className="text-sm text-destructive text-center py-8">
+          {(pluginsQuery.error as Error).message}
+        </p>
+      ) : (
+        <div className="overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Name</TableHead>
+                <TableHead>Type</TableHead>
+                <TableHead>Version</TableHead>
+                <TableHead>Builtin</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {allPlugins.map((p) => (
+                <TableRow key={`${p.category}-${p.name}`}>
+                  <TableCell className="font-mono text-sm">{p.name}</TableCell>
+                  <TableCell><Badge variant="outline" className="text-xs">{p.category}</Badge></TableCell>
+                  <TableCell className="text-sm text-muted-foreground">{p.version ?? '—'}</TableCell>
+                  <TableCell>
+                    {p.builtin
+                      ? <Badge variant="secondary" className="text-xs">builtin</Badge>
+                      : <Badge variant="outline" className="text-xs">external</Badge>}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Page ──────────────────────────────────────────────────────────────────────
 
 export default function SystemPage() {
@@ -1147,6 +1372,8 @@ export default function SystemPage() {
           <TabsTrigger value="logging">Logging</TabsTrigger>
           <TabsTrigger value="quotas"><Gauge className="w-3.5 h-3.5 mr-1" />Quotas</TabsTrigger>
           <TabsTrigger value="locked-users"><Users className="w-3.5 h-3.5 mr-1" />Locked Users</TabsTrigger>
+          <TabsTrigger value="headers">Request Headers</TabsTrigger>
+          <TabsTrigger value="plugins">Plugins</TabsTrigger>
         </TabsList>
         <TabsContent value="status" className="mt-4"><StatusTab /></TabsContent>
         <TabsContent value="audit" className="mt-4"><AuditTab /></TabsContent>
@@ -1157,6 +1384,8 @@ export default function SystemPage() {
         <TabsContent value="logging" className="mt-4"><LoggingTab /></TabsContent>
         <TabsContent value="quotas" className="mt-4"><QuotasTab /></TabsContent>
         <TabsContent value="locked-users" className="mt-4"><LockedUsersTab /></TabsContent>
+        <TabsContent value="headers" className="mt-4"><RequestHeadersTab /></TabsContent>
+        <TabsContent value="plugins" className="mt-4"><PluginsTab /></TabsContent>
       </Tabs>
     </div>
   );
