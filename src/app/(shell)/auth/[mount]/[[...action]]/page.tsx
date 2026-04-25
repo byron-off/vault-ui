@@ -5,7 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
-  Plus, Trash2, Copy, Check, ChevronLeft, AlertTriangle, RotateCcw,
+  Plus, Trash2, Copy, Check, ChevronLeft, AlertTriangle, RotateCcw, Pencil,
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -593,7 +593,7 @@ function JWTAuth({ mount }: { mount: string }) {
   );
 }
 
-// Reusable simple roles CRUD table
+// Reusable simple roles CRUD table (create + edit + delete)
 function RolesCRUD({ mount, path, queryKey, fields }: {
   mount: string;
   path: string;
@@ -603,12 +603,29 @@ function RolesCRUD({ mount, path, queryKey, fields }: {
   const qc = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
   const [form, setForm] = useState<Record<string, string>>({});
+  const [editName, setEditName] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState<Record<string, string>>({});
 
   const listQ = useQuery({
     queryKey,
     queryFn: () => vaultFetch<{ data: { keys: string[] } }>(path, { method: 'LIST' })
       .then(r => r.data.keys).catch(() => [] as string[]),
   });
+
+  const openEdit = async (name: string) => {
+    try {
+      const res = await vaultFetch<{ data: Record<string, unknown> }>(`${path}/${name}`);
+      const flat: Record<string, string> = {};
+      for (const f of fields.filter(f => f.name !== 'name')) {
+        const v = res.data[f.name];
+        flat[f.name] = Array.isArray(v) ? v.join(', ') : String(v ?? '');
+      }
+      setEditForm(flat);
+      setEditName(name);
+    } catch {
+      toast.error('Failed to load role config');
+    }
+  };
 
   const createMutation = useMutation({
     mutationFn: () => {
@@ -619,11 +636,19 @@ function RolesCRUD({ mount, path, queryKey, fields }: {
     onError: (e) => toast.error((e as Error).message),
   });
 
+  const editMutation = useMutation({
+    mutationFn: () => vaultFetch(`${path}/${editName}`, { method: 'POST', body: editForm }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey }); toast.success('Saved'); setEditName(null); },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
   const deleteMutation = useMutation({
     mutationFn: (name: string) => vaultFetch(`${path}/${name}`, { method: 'DELETE' }),
     onSuccess: () => { qc.invalidateQueries({ queryKey }); toast.success('Deleted'); },
     onError: (e) => toast.error((e as Error).message),
   });
+
+  const editFields = fields.filter(f => f.name !== 'name');
 
   return (
     <div className="space-y-4">
@@ -632,11 +657,14 @@ function RolesCRUD({ mount, path, queryKey, fields }: {
       </div>
       {listQ.isLoading ? <Skeleton className="h-24 w-full" /> :
         (listQ.data ?? []).length === 0 ? <p className="text-sm text-muted-foreground text-center py-8">No roles configured</p> : (
-          <div className="overflow-x-auto"><Table><TableHeader><TableRow><TableHead>Name</TableHead><TableHead className="w-20">Actions</TableHead></TableRow></TableHeader>
+          <div className="overflow-x-auto"><Table><TableHeader><TableRow><TableHead>Name</TableHead><TableHead className="w-24">Actions</TableHead></TableRow></TableHeader>
             <TableBody>{(listQ.data ?? []).map(r => (
               <TableRow key={r}>
                 <TableCell className="font-mono text-sm">{r}</TableCell>
-                <TableCell>
+                <TableCell className="flex gap-1">
+                  <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openEdit(r)}>
+                    <Pencil className="w-3.5 h-3.5" />
+                  </Button>
                   <AlertDialog>
                     <AlertDialogTrigger asChild>
                       <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive"><Trash2 className="w-3.5 h-3.5" /></Button>
@@ -652,6 +680,8 @@ function RolesCRUD({ mount, path, queryKey, fields }: {
           </Table></div>
         )
       }
+
+      {/* Create dialog */}
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent>
           <DialogHeader><DialogTitle>Create Role</DialogTitle></DialogHeader>
@@ -667,6 +697,26 @@ function RolesCRUD({ mount, path, queryKey, fields }: {
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
             <Button onClick={() => createMutation.mutate()} disabled={!form['name'] || createMutation.isPending}>Create</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit dialog */}
+      <Dialog open={editName !== null} onOpenChange={(o) => { if (!o) setEditName(null); }}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Edit Role: {editName}</DialogTitle></DialogHeader>
+          <div className="space-y-4">
+            {editFields.map(f => (
+              <div key={f.name} className="space-y-1.5">
+                <Label>{f.label}</Label>
+                <Input placeholder={f.placeholder ?? f.label} value={editForm[f.name] ?? ''}
+                  onChange={e => setEditForm(p => ({ ...p, [f.name]: e.target.value }))} />
+              </div>
+            ))}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditName(null)}>Cancel</Button>
+            <Button onClick={() => editMutation.mutate()} disabled={editMutation.isPending}>Save</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
