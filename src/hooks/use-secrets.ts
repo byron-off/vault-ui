@@ -11,46 +11,48 @@ import {
   undeleteSecretVersions,
   destroySecretVersions,
   deleteSecretMetadata,
+  deleteSecretV1,
+  type KVCtx,
 } from '@/lib/vault/api/secrets';
 
-export function useSecretList(path: string, enabled = true) {
+export function useSecretList(ctx: KVCtx, path: string, enabled = true) {
   return useQuery({
-    queryKey: ['secrets', 'list', path],
-    queryFn: () => listSecrets(path),
+    queryKey: ['secrets', ctx.mount, 'list', path],
+    queryFn: () => listSecrets(ctx, path),
     enabled,
   });
 }
 
-export function useSecret(path: string, version?: number, enabled = true) {
+export function useSecret(ctx: KVCtx, path: string, version?: number, enabled = true) {
   return useQuery({
-    queryKey: ['secrets', 'read', path, version],
-    queryFn: () => readSecret(path, version),
+    queryKey: ['secrets', ctx.mount, 'read', path, version],
+    queryFn: () => readSecret(ctx, path, version),
     enabled,
   });
 }
 
-export function useSecretMetadata(path: string, enabled = true) {
+export function useSecretMetadata(ctx: KVCtx, path: string, enabled = true) {
   return useQuery({
-    queryKey: ['secrets', 'metadata', path],
-    queryFn: () => getSecretMetadata(path),
+    queryKey: ['secrets', ctx.mount, 'metadata', path],
+    queryFn: () => getSecretMetadata(ctx, path),
     enabled,
   });
 }
 
-export function useWriteSecret() {
+export function useWriteSecret(ctx: KVCtx) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ path, data, cas }: { path: string; data: Record<string, string>; cas?: number }) =>
-      writeSecret(path, data, cas),
+      writeSecret(ctx, path, data, cas),
     onSuccess: (_, { path }) => {
-      qc.invalidateQueries({ queryKey: ['secrets', 'list'] });
-      qc.invalidateQueries({ queryKey: ['secrets', 'read', path] });
-      qc.invalidateQueries({ queryKey: ['secrets', 'metadata', path] });
+      qc.invalidateQueries({ queryKey: ['secrets', ctx.mount, 'list'] });
+      qc.invalidateQueries({ queryKey: ['secrets', ctx.mount, 'read', path] });
+      qc.invalidateQueries({ queryKey: ['secrets', ctx.mount, 'metadata', path] });
     },
   });
 }
 
-export function useUpdateSecretMetadata() {
+export function useUpdateSecretMetadata(ctx: KVCtx) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({
@@ -59,54 +61,55 @@ export function useUpdateSecretMetadata() {
     }: {
       path: string;
       opts: { max_versions?: number; cas_required?: boolean; custom_metadata?: Record<string, string> };
-    }) => updateSecretMetadata(path, opts),
+    }) => updateSecretMetadata(ctx, path, opts),
     onSuccess: (_, { path }) => {
-      qc.invalidateQueries({ queryKey: ['secrets', 'metadata', path] });
+      qc.invalidateQueries({ queryKey: ['secrets', ctx.mount, 'metadata', path] });
     },
   });
 }
 
-export function useSoftDeleteVersions() {
+export function useSoftDeleteVersions(ctx: KVCtx) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ path, versions }: { path: string; versions: number[] }) =>
-      softDeleteSecretVersions(path, versions),
+      softDeleteSecretVersions(ctx, path, versions),
     onSuccess: (_, { path }) => {
-      qc.invalidateQueries({ queryKey: ['secrets', 'metadata', path] });
-      qc.invalidateQueries({ queryKey: ['secrets', 'read', path] });
+      qc.invalidateQueries({ queryKey: ['secrets', ctx.mount, 'metadata', path] });
+      qc.invalidateQueries({ queryKey: ['secrets', ctx.mount, 'read', path] });
     },
   });
 }
 
-export function useUndeleteVersions() {
+export function useUndeleteVersions(ctx: KVCtx) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ path, versions }: { path: string; versions: number[] }) =>
-      undeleteSecretVersions(path, versions),
+      undeleteSecretVersions(ctx, path, versions),
     onSuccess: (_, { path }) => {
-      qc.invalidateQueries({ queryKey: ['secrets', 'metadata', path] });
-      qc.invalidateQueries({ queryKey: ['secrets', 'read', path] });
+      qc.invalidateQueries({ queryKey: ['secrets', ctx.mount, 'metadata', path] });
+      qc.invalidateQueries({ queryKey: ['secrets', ctx.mount, 'read', path] });
     },
   });
 }
 
-export function useDestroyVersions() {
+export function useDestroyVersions(ctx: KVCtx) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ path, versions }: { path: string; versions: number[] }) =>
-      destroySecretVersions(path, versions),
+      destroySecretVersions(ctx, path, versions),
     onSuccess: (_, { path }) => {
-      qc.invalidateQueries({ queryKey: ['secrets', 'metadata', path] });
+      qc.invalidateQueries({ queryKey: ['secrets', ctx.mount, 'metadata', path] });
     },
   });
 }
 
-export function useDeleteSecretMetadata() {
+export function useDeleteSecretMetadata(ctx: KVCtx) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (path: string) => deleteSecretMetadata(path),
+    mutationFn: (path: string) =>
+      ctx.isV1 ? deleteSecretV1(ctx, path) : deleteSecretMetadata(ctx, path),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['secrets', 'list'] });
+      qc.invalidateQueries({ queryKey: ['secrets', ctx.mount, 'list'] });
     },
   });
 }

@@ -5,7 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
   ShieldCheck, ShieldOff, Server, Wifi, Wrench, Hash,
-  Plus, Trash2, Loader2, RefreshCw, RotateCcw, Users, Gauge, Unlock,
+  Plus, Trash2, Loader2, RefreshCw, RotateCcw, Users, Gauge, Unlock, Copy, KeyRound,
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -389,6 +389,357 @@ function ToolsTab() {
           {randomResult && <code className="block font-mono text-xs bg-muted rounded px-3 py-2 break-all">{randomResult}</code>}
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+// ─── Rekey Tab ─────────────────────────────────────────────────────────────────
+
+type RekeyStatus = {
+  started: boolean;
+  nonce?: string;
+  t?: number;
+  n?: number;
+  progress?: number;
+  required?: number;
+};
+
+function RekeySubSection({
+  title,
+  initPath,
+  updatePath,
+}: {
+  title: string;
+  initPath: string;
+  updatePath: string;
+}) {
+  const qc = useQueryClient();
+  const [shares, setShares] = useState('5');
+  const [threshold, setThreshold] = useState('3');
+  const [keyShare, setKeyShare] = useState('');
+  const [newKeys, setNewKeys] = useState<string[] | null>(null);
+
+  const statusQuery = useQuery({
+    queryKey: ['sys', 'rekey', initPath],
+    queryFn: async () => {
+      try {
+        const res = await vaultFetch<RekeyStatus>(initPath);
+        return res;
+      } catch {
+        return { started: false } as RekeyStatus;
+      }
+    },
+  });
+
+  const initMutation = useMutation({
+    mutationFn: () =>
+      vaultFetch(initPath, {
+        method: 'POST',
+        body: { secret_shares: parseInt(shares), secret_threshold: parseInt(threshold) },
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['sys', 'rekey', initPath] });
+      toast.success('Rekey initialized');
+    },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: () =>
+      vaultFetch<{ complete?: boolean; keys?: string[] }>(updatePath, {
+        method: 'PUT',
+        body: { key: keyShare, nonce: statusQuery.data?.nonce },
+      }),
+    onSuccess: (data) => {
+      setKeyShare('');
+      qc.invalidateQueries({ queryKey: ['sys', 'rekey', initPath] });
+      if (data.complete && data.keys) {
+        setNewKeys(data.keys);
+        toast.success('Rekey complete! Save your new keys.');
+      } else {
+        toast.success('Key share accepted');
+      }
+    },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  const cancelMutation = useMutation({
+    mutationFn: () => vaultFetch(initPath, { method: 'DELETE' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['sys', 'rekey', initPath] });
+      setNewKeys(null);
+      toast.success('Rekey cancelled');
+    },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  const status = statusQuery.data;
+  const inProgress = status?.started;
+
+  if (newKeys) {
+    return (
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base text-green-600 flex items-center gap-2">
+            <KeyRound className="w-4 h-4" /> {title} — Complete
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <Alert>
+            <AlertDescription className="text-sm font-medium">
+              Save these unseal keys now — they will not be shown again.
+            </AlertDescription>
+          </Alert>
+          <div className="space-y-2">
+            {newKeys.map((key, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground w-6 shrink-0">#{i + 1}</span>
+                <code className="flex-1 font-mono text-xs bg-muted px-3 py-2 rounded break-all">{key}</code>
+                <Button size="icon" variant="ghost" className="h-7 w-7 shrink-0"
+                  onClick={() => { navigator.clipboard.writeText(key); toast.success('Copied'); }}>
+                  <Copy className="w-3.5 h-3.5" />
+                </Button>
+              </div>
+            ))}
+          </div>
+          <Button variant="outline" onClick={() => setNewKeys(null)}>Done</Button>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-base">{title}</CardTitle>
+          {inProgress && (
+            <Button size="sm" variant="outline" className="text-destructive border-destructive/40"
+              onClick={() => cancelMutation.mutate()} disabled={cancelMutation.isPending}>
+              Cancel Rekey
+            </Button>
+          )}
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {statusQuery.isLoading ? (
+          <Skeleton className="h-16 w-full" />
+        ) : inProgress ? (
+          <>
+            <div className="text-sm space-y-1">
+              <p>
+                Progress:{' '}
+                <strong>{status?.progress ?? 0}</strong> /{' '}
+                <strong>{status?.required ?? status?.t}</strong> key shares submitted
+              </p>
+              <p className="font-mono text-xs text-muted-foreground">Nonce: {status?.nonce}</p>
+            </div>
+            <div className="flex gap-2">
+              <Input
+                placeholder="Enter unseal key share (base64)"
+                value={keyShare}
+                onChange={(e) => setKeyShare(e.target.value)}
+                className="font-mono text-xs"
+              />
+              <Button onClick={() => updateMutation.mutate()}
+                disabled={!keyShare || updateMutation.isPending}>
+                Submit
+              </Button>
+            </div>
+          </>
+        ) : (
+          <>
+            <Alert>
+              <AlertDescription className="text-sm">
+                Rekeying generates a new set of unseal keys with a new threshold. You need the
+                current threshold of key shares to complete the process.
+              </AlertDescription>
+            </Alert>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label>Key Shares (n) <span className="text-destructive">*</span></Label>
+                <Input type="number" min={1} value={shares}
+                  onChange={(e) => setShares(e.target.value)} />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Key Threshold (t) <span className="text-destructive">*</span></Label>
+                <Input type="number" min={1} value={threshold}
+                  onChange={(e) => setThreshold(e.target.value)} />
+              </div>
+            </div>
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button disabled={initMutation.isPending}>Initialize Rekey</Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Initialize rekey?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    This will start a rekey operation requiring {threshold} of {shares} new key
+                    shares. You will need the current unseal keys to complete it.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction onClick={() => initMutation.mutate()}>
+                    Initialize
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function RekeyTab() {
+  return (
+    <div className="space-y-4 max-w-lg">
+      <RekeySubSection
+        title="Barrier Key Rekey"
+        initPath="/sys/rekey/init"
+        updatePath="/sys/rekey/update"
+      />
+      <RekeySubSection
+        title="Recovery Key Rekey"
+        initPath="/sys/rekey-recovery-key/init"
+        updatePath="/sys/rekey-recovery-key/update"
+      />
+    </div>
+  );
+}
+
+// ─── Logging Tab ───────────────────────────────────────────────────────────────
+
+const LOG_LEVELS = ['trace', 'debug', 'info', 'warn', 'error'] as const;
+
+function LoggingTab() {
+  const qc = useQueryClient();
+
+  const loggersQuery = useQuery({
+    queryKey: ['sys', 'loggers'],
+    queryFn: async () => {
+      const res = await vaultFetch<{ data: Record<string, { level: string }> }>('/sys/loggers');
+      return res.data;
+    },
+  });
+
+  const setLevelMutation = useMutation({
+    mutationFn: ({ name, level }: { name: string; level: string }) =>
+      vaultFetch(`/sys/loggers/${name}`, { method: 'POST', body: { level } }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['sys', 'loggers'] });
+      toast.success('Log level updated');
+    },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  const resetMutation = useMutation({
+    mutationFn: (name: string) => vaultFetch(`/sys/loggers/${name}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['sys', 'loggers'] });
+      toast.success('Logger reset to default');
+    },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  const setAllMutation = useMutation({
+    mutationFn: (level: string) =>
+      vaultFetch('/sys/loggers', { method: 'POST', body: { level } }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['sys', 'loggers'] });
+      toast.success('All loggers updated');
+    },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  const resetAllMutation = useMutation({
+    mutationFn: () => vaultFetch('/sys/loggers', { method: 'DELETE' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['sys', 'loggers'] });
+      toast.success('All loggers reset to defaults');
+    },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  const loggers = loggersQuery.data ? Object.entries(loggersQuery.data) : [];
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <h3 className="font-medium text-sm">Log Levels</h3>
+        <div className="flex gap-2">
+          <Select onValueChange={(v) => setAllMutation.mutate(v)}>
+            <SelectTrigger className="w-36 h-8 text-xs">
+              <SelectValue placeholder="Set all to…" />
+            </SelectTrigger>
+            <SelectContent>
+              {LOG_LEVELS.map((l) => (
+                <SelectItem key={l} value={l} className="text-xs">{l}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Button size="sm" variant="outline" onClick={() => resetAllMutation.mutate()}
+            disabled={resetAllMutation.isPending}>
+            Reset All
+          </Button>
+        </div>
+      </div>
+
+      {loggersQuery.isLoading ? (
+        <div className="space-y-2">
+          {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}
+        </div>
+      ) : loggersQuery.error ? (
+        <p className="text-sm text-destructive text-center py-8">
+          {(loggersQuery.error as Error).message}
+        </p>
+      ) : loggers.length === 0 ? (
+        <p className="text-sm text-muted-foreground text-center py-8">No loggers available</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Logger</TableHead>
+                <TableHead className="w-36">Level</TableHead>
+                <TableHead className="w-20">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loggers.map(([name, info]) => (
+                <TableRow key={name}>
+                  <TableCell className="font-mono text-sm">{name}</TableCell>
+                  <TableCell>
+                    <Select
+                      value={info.level?.toLowerCase()}
+                      onValueChange={(v) => setLevelMutation.mutate({ name, level: v })}
+                    >
+                      <SelectTrigger className="h-7 text-xs w-28">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {LOG_LEVELS.map((l) => (
+                          <SelectItem key={l} value={l} className="text-xs">{l}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </TableCell>
+                  <TableCell>
+                    <Button size="sm" variant="ghost" className="h-7 text-xs"
+                      onClick={() => resetMutation.mutate(name)}
+                      disabled={resetMutation.isPending}>
+                      Reset
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
     </div>
   );
 }
@@ -792,6 +1143,8 @@ export default function SystemPage() {
           <TabsTrigger value="cors">CORS</TabsTrigger>
           <TabsTrigger value="tools">Tools</TabsTrigger>
           <TabsTrigger value="rotate">Key Rotation</TabsTrigger>
+          <TabsTrigger value="rekey">Rekey</TabsTrigger>
+          <TabsTrigger value="logging">Logging</TabsTrigger>
           <TabsTrigger value="quotas"><Gauge className="w-3.5 h-3.5 mr-1" />Quotas</TabsTrigger>
           <TabsTrigger value="locked-users"><Users className="w-3.5 h-3.5 mr-1" />Locked Users</TabsTrigger>
         </TabsList>
@@ -800,6 +1153,8 @@ export default function SystemPage() {
         <TabsContent value="cors" className="mt-4"><CORSTab /></TabsContent>
         <TabsContent value="tools" className="mt-4"><ToolsTab /></TabsContent>
         <TabsContent value="rotate" className="mt-4"><RotateTab /></TabsContent>
+        <TabsContent value="rekey" className="mt-4"><RekeyTab /></TabsContent>
+        <TabsContent value="logging" className="mt-4"><LoggingTab /></TabsContent>
         <TabsContent value="quotas" className="mt-4"><QuotasTab /></TabsContent>
         <TabsContent value="locked-users" className="mt-4"><LockedUsersTab /></TabsContent>
       </Tabs>
