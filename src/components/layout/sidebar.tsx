@@ -217,6 +217,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
           >
             Disconnect
           </button>
+          <p className="text-[10px] text-muted-foreground/50 pl-5 pt-1">v0.1.0</p>
         </div>
       </aside>
     </>
