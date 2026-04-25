@@ -98,6 +98,7 @@ export default function AliasesPage() {
           <Button variant="outline" onClick={() => setCreateOpen(true)}>Create your first alias</Button>
         </div>
       ) : (
+        <div className="overflow-x-auto">
         <Table>
           <TableHeader>
             <TableRow>
@@ -138,6 +139,7 @@ export default function AliasesPage() {
             ))}
           </TableBody>
         </Table>
+        </div>
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>

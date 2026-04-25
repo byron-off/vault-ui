@@ -775,7 +775,7 @@ function PrefixPane({ prefix }: PrefixPaneProps) {
                     <Badge variant="secondary">{leaseIds.length}</Badge>
                   </h3>
                   <div className="rounded-md border overflow-hidden">
-                    <Table>
+                    <div className="overflow-x-auto"><Table>
                       <TableHeader>
                         <TableRow>
                           <TableHead className="text-xs">Lease ID</TableHead>
@@ -797,7 +797,7 @@ function PrefixPane({ prefix }: PrefixPaneProps) {
                           />
                         ))}
                       </TableBody>
-                    </Table>
+                    </Table></div>
                   </div>
                 </div>
               ) : subPrefixes.length === 0 ? (
@@ -863,14 +863,14 @@ export default function LeasesPage() {
       </div>
 
       {/* Two-pane layout */}
-      <div className="flex gap-0 border rounded-lg overflow-hidden" style={{ height: 'calc(100vh - 180px)' }}>
+      <div className="flex flex-col md:flex-row gap-0 border rounded-lg overflow-hidden" style={{ minHeight: '400px', height: 'calc(100vh - 180px)' }}>
         {/* Left pane */}
-        <div className="w-72 shrink-0 border-r bg-muted/20">
+        <div className="md:w-72 shrink-0 border-b md:border-b-0 md:border-r bg-muted/20" style={{ maxHeight: '40vh', overflow: 'auto' }}>
           <PrefixTree selected={selectedPrefix} onSelect={setSelectedPrefix} />
         </div>
 
         {/* Right pane */}
-        <div className="flex-1 overflow-hidden">
+        <div className="flex-1 overflow-auto min-h-[250px]">
           {selectedPrefix !== null ? (
             <PrefixPane key={selectedPrefix} prefix={selectedPrefix} />
           ) : (

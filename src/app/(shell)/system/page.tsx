@@ -149,6 +149,7 @@ function StatusTab() {
                 <span>{haQuery.data.is_self ? 'Yes' : 'No'}</span>
               </div>
               {haQuery.data.nodes && haQuery.data.nodes.length > 0 && (
+                <div className="overflow-x-auto">
                 <Table>
                   <TableHeader><TableRow><TableHead>Address</TableHead><TableHead>Role</TableHead></TableRow></TableHeader>
                   <TableBody>
@@ -160,6 +161,7 @@ function StatusTab() {
                     ))}
                   </TableBody>
                 </Table>
+                </div>
               )}
             </div>
           )}
@@ -209,6 +211,7 @@ function AuditTab() {
       {devicesQuery.isLoading ? <Skeleton className="h-24 w-full" /> : devices.length === 0 ? (
         <p className="text-sm text-muted-foreground text-center py-8">No audit devices configured</p>
       ) : (
+        <div className="overflow-x-auto">
         <Table>
           <TableHeader><TableRow><TableHead>Path</TableHead><TableHead>Type</TableHead><TableHead>Description</TableHead><TableHead className="w-20">Actions</TableHead></TableRow></TableHeader>
           <TableBody>
@@ -235,6 +238,7 @@ function AuditTab() {
             ))}
           </TableBody>
         </Table>
+        </div>
       )}
 
       <Dialog open={enableOpen} onOpenChange={setEnableOpen}>
@@ -551,6 +555,7 @@ function QuotasTab() {
       ) : quotas.length === 0 ? (
         <p className="text-sm text-muted-foreground text-center py-8">No rate limit quotas configured</p>
       ) : (
+        <div className="overflow-x-auto">
         <Table>
           <TableHeader>
             <TableRow>
@@ -600,6 +605,7 @@ function QuotasTab() {
             ))}
           </TableBody>
         </Table>
+        </div>
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
@@ -722,6 +728,7 @@ function LockedUsersTab() {
                 </CardTitle>
               </CardHeader>
               <CardContent className="pb-3">
+                <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -756,6 +763,7 @@ function LockedUsersTab() {
                     ))}
                   </TableBody>
                 </Table>
+                </div>
               </CardContent>
             </Card>
           ))}

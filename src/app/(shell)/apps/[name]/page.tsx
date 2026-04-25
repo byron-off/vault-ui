@@ -404,7 +404,7 @@ export default function AppDetailPage() {
                   No active Secret IDs
                 </p>
               ) : (
-                <Table>
+                <div className="overflow-x-auto"><Table>
                   <TableHeader>
                     <TableRow>
                       <TableHead>Accessor</TableHead>
@@ -453,7 +453,7 @@ export default function AppDetailPage() {
                       </TableRow>
                     ))}
                   </TableBody>
-                </Table>
+                </Table></div>
               )}
             </CardContent>
           </Card>

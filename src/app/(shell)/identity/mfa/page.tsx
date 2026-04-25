@@ -141,6 +141,7 @@ function MethodsTab() {
           </CardContent>
         </Card>
       ) : (
+        <div className="overflow-x-auto">
         <Table>
           <TableHeader>
             <TableRow>
@@ -202,6 +203,7 @@ function MethodsTab() {
             })}
           </TableBody>
         </Table>
+        </div>
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>

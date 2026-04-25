@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Sidebar } from '@/components/layout/sidebar';
 import { Header } from '@/components/layout/header';
@@ -9,6 +9,7 @@ import { useConnectionStore } from '@/lib/store';
 export default function ShellLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const { addr, token } = useConnectionStore();
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   useEffect(() => {
     if (!addr || !token) {
@@ -20,9 +21,9 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
 
   return (
     <div className="min-h-screen">
-      <Sidebar />
-      <Header />
-      <main className="ml-[220px] mt-12 p-8 max-w-[1280px]">{children}</main>
+      <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+      <Header onMenuClick={() => setSidebarOpen((v) => !v)} />
+      <main className="md:ml-[220px] mt-12 p-4 md:p-8 max-w-[1280px]">{children}</main>
     </div>
   );
 }

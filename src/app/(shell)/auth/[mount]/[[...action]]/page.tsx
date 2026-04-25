@@ -208,7 +208,7 @@ function AppRoleAuth({ mount }: { mount: string }) {
                   <CardContent>
                     {secretIdsQ.isLoading ? <Skeleton className="h-16 w-full" /> :
                       (secretIdsQ.data ?? []).length === 0 ? <p className="text-sm text-muted-foreground">No active Secret IDs</p> : (
-                        <Table><TableHeader><TableRow><TableHead>Accessor</TableHead><TableHead className="w-20">Actions</TableHead></TableRow></TableHeader>
+                        <div className="overflow-x-auto"><Table><TableHeader><TableRow><TableHead>Accessor</TableHead><TableHead className="w-20">Actions</TableHead></TableRow></TableHeader>
                           <TableBody>{(secretIdsQ.data ?? []).map(acc => (
                             <TableRow key={acc}>
                               <TableCell className="font-mono text-xs">{truncate(acc, 20)}</TableCell>
@@ -225,7 +225,7 @@ function AppRoleAuth({ mount }: { mount: string }) {
                               </TableCell>
                             </TableRow>
                           ))}</TableBody>
-                        </Table>
+                        </Table></div>
                       )
                     }
                   </CardContent>
@@ -528,7 +528,7 @@ function RolesCRUD({ mount, path, queryKey, fields }: {
       </div>
       {listQ.isLoading ? <Skeleton className="h-24 w-full" /> :
         (listQ.data ?? []).length === 0 ? <p className="text-sm text-muted-foreground text-center py-8">No roles configured</p> : (
-          <Table><TableHeader><TableRow><TableHead>Name</TableHead><TableHead className="w-20">Actions</TableHead></TableRow></TableHeader>
+          <div className="overflow-x-auto"><Table><TableHeader><TableRow><TableHead>Name</TableHead><TableHead className="w-20">Actions</TableHead></TableRow></TableHeader>
             <TableBody>{(listQ.data ?? []).map(r => (
               <TableRow key={r}>
                 <TableCell className="font-mono text-sm">{r}</TableCell>
@@ -545,7 +545,7 @@ function RolesCRUD({ mount, path, queryKey, fields }: {
                 </TableCell>
               </TableRow>
             ))}</TableBody>
-          </Table>
+          </Table></div>
         )
       }
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
