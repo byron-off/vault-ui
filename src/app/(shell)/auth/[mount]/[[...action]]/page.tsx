@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
@@ -30,6 +30,7 @@ import {
 } from '@/components/ui/table';
 import { Switch } from '@/components/ui/switch';
 import { Separator } from '@/components/ui/separator';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { CidrInput } from '@/components/ui/cidr-input';
 
 import { vaultFetch } from '@/lib/vault/client';
@@ -762,6 +763,239 @@ function GenericAuth({ mount, type, info }: { mount: string; type: string; info:
   );
 }
 
+// ─── Userpass ─────────────────────────────────────────────────────────────────
+
+function UserpassAuth({ mount }: { mount: string }) {
+  const qc = useQueryClient();
+  const [createOpen, setCreateOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [form, setForm] = useState({ name: '', password: '', policies: '' });
+  const [editUser, setEditUser] = useState({ username: '', password: '', policies: '' });
+
+  const usersQ = useQuery({
+    queryKey: ['auth', mount, 'users'],
+    queryFn: () => vaultFetch<{ data: { keys: string[] } }>(`/auth/${mount}/users`, { method: 'LIST' })
+      .then(r => r.data.keys).catch(() => [] as string[]),
+  });
+
+  const openEdit = async (username: string) => {
+    try {
+      const res = await vaultFetch<{ data: { policies?: string[]; token_policies?: string[] } }>(`/auth/${mount}/users/${username}`);
+      const pols = [...(res.data.token_policies ?? res.data.policies ?? [])].join(', ');
+      setEditUser({ username, password: '', policies: pols });
+      setEditOpen(true);
+    } catch { toast.error('Failed to load user'); }
+  };
+
+  const createMutation = useMutation({
+    mutationFn: () => vaultFetch(`/auth/${mount}/users/${form.name}`, { method: 'POST', body: { password: form.password, token_policies: form.policies.split(',').map(s => s.trim()).filter(Boolean) } }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['auth', mount, 'users'] }); toast.success('User created'); setCreateOpen(false); setForm({ name: '', password: '', policies: '' }); },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      const body: Record<string, unknown> = { token_policies: editUser.policies.split(',').map(s => s.trim()).filter(Boolean) };
+      if (editUser.password) body.password = editUser.password;
+      await vaultFetch(`/auth/${mount}/users/${editUser.username}`, { method: 'POST', body });
+    },
+    onSuccess: () => { toast.success('User updated'); setEditOpen(false); },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (name: string) => vaultFetch(`/auth/${mount}/users/${name}`, { method: 'DELETE' }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['auth', mount, 'users'] }); toast.success('Deleted'); },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  return (
+    <div className="space-y-4">
+      <div className="flex justify-end"><Button size="sm" onClick={() => setCreateOpen(true)}><Plus className="w-4 h-4" />Create User</Button></div>
+      {usersQ.isLoading ? <Skeleton className="h-24 w-full" /> :
+        (usersQ.data ?? []).length === 0
+          ? <p className="text-sm text-muted-foreground text-center py-8">No users configured</p>
+          : <div className="overflow-x-auto"><Table><TableHeader><TableRow><TableHead>Username</TableHead><TableHead className="w-24">Actions</TableHead></TableRow></TableHeader>
+              <TableBody>{(usersQ.data ?? []).map(u => (
+                <TableRow key={u}>
+                  <TableCell className="font-mono text-sm">{u}</TableCell>
+                  <TableCell className="flex gap-1">
+                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openEdit(u)}><Pencil className="w-3.5 h-3.5" /></Button>
+                    <AlertDialog><AlertDialogTrigger asChild><Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive"><Trash2 className="w-3.5 h-3.5" /></Button></AlertDialogTrigger>
+                      <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Delete user?</AlertDialogTitle><AlertDialogDescription>Delete <strong>{u}</strong>?</AlertDialogDescription></AlertDialogHeader>
+                        <AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction className="bg-destructive text-destructive-foreground" onClick={() => deleteMutation.mutate(u)}>Delete</AlertDialogAction></AlertDialogFooter>
+                      </AlertDialogContent></AlertDialog>
+                  </TableCell>
+                </TableRow>
+              ))}</TableBody>
+            </Table></div>
+      }
+      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+        <DialogContent><DialogHeader><DialogTitle>Create User</DialogTitle></DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-1.5"><Label>Username <span className="text-destructive">*</span></Label><Input placeholder="alice" value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} /></div>
+            <div className="space-y-1.5"><Label>Password <span className="text-destructive">*</span></Label><Input type="password" value={form.password} onChange={e => setForm(p => ({ ...p, password: e.target.value }))} /></div>
+            <div className="space-y-1.5"><Label>Policies (comma-separated)</Label><Input placeholder="default, my-policy" value={form.policies} onChange={e => setForm(p => ({ ...p, policies: e.target.value }))} /></div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
+            <Button onClick={() => createMutation.mutate()} disabled={!form.name || !form.password || createMutation.isPending}>Create</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <DialogContent><DialogHeader><DialogTitle>Edit: {editUser.username}</DialogTitle></DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-1.5"><Label>New Password (blank = keep current)</Label><Input type="password" value={editUser.password} onChange={e => setEditUser(p => ({ ...p, password: e.target.value }))} /></div>
+            <div className="space-y-1.5"><Label>Policies (comma-separated)</Label><Input value={editUser.policies} onChange={e => setEditUser(p => ({ ...p, policies: e.target.value }))} /></div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditOpen(false)}>Cancel</Button>
+            <Button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending}>Save</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+// ─── LDAP ─────────────────────────────────────────────────────────────────────
+
+function LDAPAuth({ mount }: { mount: string }) {
+  const [cfg, setCfg] = useState<Record<string, string>>({});
+  const cfgQ = useQuery({
+    queryKey: ['auth', mount, 'config'],
+    queryFn: () => vaultFetch<{ data: Record<string, unknown> }>(`/auth/${mount}/config`).then(r => r.data).catch(() => ({}) as Record<string, unknown>),
+  });
+  useEffect(() => {
+    if (cfgQ.data) {
+      const flat: Record<string, string> = {};
+      for (const [k, v] of Object.entries(cfgQ.data)) flat[k] = String(v ?? '');
+      setCfg(flat);
+    }
+  }, [cfgQ.data]);
+  const saveCfg = useMutation({
+    mutationFn: () => vaultFetch(`/auth/${mount}/config`, { method: 'POST', body: cfg }),
+    onSuccess: () => toast.success('Config saved'),
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  return (
+    <Tabs defaultValue="config">
+      <TabsList><TabsTrigger value="config">Config</TabsTrigger><TabsTrigger value="users">Users</TabsTrigger><TabsTrigger value="groups">Groups</TabsTrigger></TabsList>
+      <TabsContent value="config" className="mt-4">
+        <Card><CardContent className="pt-6 space-y-4">
+          {([['url','LDAP URL','ldap://dc.example.com'],['userdn','User DN','ou=Users,dc=example,dc=com'],['userattr','User Attribute','cn'],['groupdn','Group DN','ou=Groups,dc=example,dc=com'],['groupattr','Group Attribute','cn'],['groupfilter','Group Filter',''],['binddn','Bind DN',''],['bindpass','Bind Password',''],['certificate','CA Certificate (PEM)','']] as [string,string,string][]).map(([k,label,ph]) => (
+            <div key={k} className="space-y-1.5"><Label>{label}</Label>
+              {k === 'certificate' ? <Textarea rows={4} className="font-mono text-xs" placeholder="-----BEGIN CERTIFICATE-----" value={cfg[k]??''} onChange={e=>setCfg(p=>({...p,[k]:e.target.value}))} /> :
+               <Input placeholder={ph} type={k==='bindpass'?'password':'text'} value={cfg[k]??''} onChange={e=>setCfg(p=>({...p,[k]:e.target.value}))} />}
+            </div>
+          ))}
+          <Button onClick={()=>saveCfg.mutate()} disabled={saveCfg.isPending}>Save Config</Button>
+        </CardContent></Card>
+      </TabsContent>
+      <TabsContent value="users" className="mt-4">
+        <RolesCRUD mount={mount} path={`/auth/${mount}/users`} queryKey={['auth',mount,'ldap-users']}
+          fields={[{name:'name',label:'Username',required:true},{name:'policies',label:'Policies (comma-sep)',placeholder:'default'}]} />
+      </TabsContent>
+      <TabsContent value="groups" className="mt-4">
+        <RolesCRUD mount={mount} path={`/auth/${mount}/groups`} queryKey={['auth',mount,'ldap-groups']}
+          fields={[{name:'name',label:'Group Name',required:true},{name:'policies',label:'Policies (comma-sep)',placeholder:'default'}]} />
+      </TabsContent>
+    </Tabs>
+  );
+}
+
+// ─── GitHub ───────────────────────────────────────────────────────────────────
+
+function GitHubAuth({ mount }: { mount: string }) {
+  const [cfg, setCfg] = useState<Record<string, string>>({});
+  const cfgQ = useQuery({
+    queryKey: ['auth', mount, 'config'],
+    queryFn: () => vaultFetch<{ data: Record<string, unknown> }>(`/auth/${mount}/config`).then(r => r.data).catch(() => ({}) as Record<string, unknown>),
+  });
+  useEffect(() => {
+    if (cfgQ.data) {
+      const flat: Record<string, string> = {};
+      for (const [k, v] of Object.entries(cfgQ.data)) flat[k] = String(v ?? '');
+      setCfg(flat);
+    }
+  }, [cfgQ.data]);
+  const saveCfg = useMutation({
+    mutationFn: () => vaultFetch(`/auth/${mount}/config`, { method: 'POST', body: cfg }),
+    onSuccess: () => toast.success('Config saved'),
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  return (
+    <Tabs defaultValue="config">
+      <TabsList><TabsTrigger value="config">Config</TabsTrigger><TabsTrigger value="teams">Teams</TabsTrigger><TabsTrigger value="users">Users</TabsTrigger></TabsList>
+      <TabsContent value="config" className="mt-4">
+        <Card><CardContent className="pt-6 space-y-4">
+          {([['organization','GitHub Organization','my-org'],['base_url','Base URL (GitHub Enterprise)','https://github.example.com/api/v3/'],['token_type','Token Type','default']] as [string,string,string][]).map(([k,label,ph]) => (
+            <div key={k} className="space-y-1.5"><Label>{label}</Label><Input placeholder={ph} value={cfg[k]??''} onChange={e=>setCfg(p=>({...p,[k]:e.target.value}))} /></div>
+          ))}
+          <Button onClick={()=>saveCfg.mutate()} disabled={saveCfg.isPending}>Save Config</Button>
+        </CardContent></Card>
+      </TabsContent>
+      <TabsContent value="teams" className="mt-4">
+        <RolesCRUD mount={mount} path={`/auth/${mount}/map/teams`} queryKey={['auth',mount,'gh-teams']}
+          fields={[{name:'name',label:'Team (org/team-slug)',required:true},{name:'value',label:'Policies (comma-sep)',placeholder:'default'}]} />
+      </TabsContent>
+      <TabsContent value="users" className="mt-4">
+        <RolesCRUD mount={mount} path={`/auth/${mount}/map/users`} queryKey={['auth',mount,'gh-users']}
+          fields={[{name:'name',label:'GitHub Username',required:true},{name:'value',label:'Policies (comma-sep)',placeholder:'default'}]} />
+      </TabsContent>
+    </Tabs>
+  );
+}
+
+// ─── Kubernetes ───────────────────────────────────────────────────────────────
+
+function KubernetesAuth({ mount }: { mount: string }) {
+  const [cfg, setCfg] = useState<Record<string, string>>({});
+  const cfgQ = useQuery({
+    queryKey: ['auth', mount, 'config'],
+    queryFn: () => vaultFetch<{ data: Record<string, unknown> }>(`/auth/${mount}/config`).then(r => r.data).catch(() => ({}) as Record<string, unknown>),
+  });
+  useEffect(() => {
+    if (cfgQ.data) {
+      const flat: Record<string, string> = {};
+      for (const [k, v] of Object.entries(cfgQ.data)) flat[k] = typeof v === 'object' ? JSON.stringify(v) : String(v ?? '');
+      setCfg(flat);
+    }
+  }, [cfgQ.data]);
+  const saveCfg = useMutation({
+    mutationFn: () => vaultFetch(`/auth/${mount}/config`, { method: 'POST', body: cfg }),
+    onSuccess: () => toast.success('Config saved'),
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  return (
+    <Tabs defaultValue="config">
+      <TabsList><TabsTrigger value="config">Config</TabsTrigger><TabsTrigger value="roles">Roles</TabsTrigger></TabsList>
+      <TabsContent value="config" className="mt-4">
+        <Card><CardContent className="pt-6 space-y-4">
+          <div className="space-y-1.5"><Label>Kubernetes Host</Label><Input placeholder="https://kubernetes.default.svc" value={cfg['kubernetes_host']??''} onChange={e=>setCfg(p=>({...p,kubernetes_host:e.target.value}))} /></div>
+          <div className="space-y-1.5"><Label>CA Certificate (PEM)</Label><Textarea rows={4} className="font-mono text-xs" placeholder="-----BEGIN CERTIFICATE-----" value={cfg['kubernetes_ca_cert']??''} onChange={e=>setCfg(p=>({...p,kubernetes_ca_cert:e.target.value}))} /></div>
+          <div className="space-y-1.5"><Label>Token Reviewer JWT</Label><Textarea rows={3} className="font-mono text-xs" value={cfg['token_reviewer_jwt']??''} onChange={e=>setCfg(p=>({...p,token_reviewer_jwt:e.target.value}))} /></div>
+          <Button onClick={()=>saveCfg.mutate()} disabled={saveCfg.isPending}>Save Config</Button>
+        </CardContent></Card>
+      </TabsContent>
+      <TabsContent value="roles" className="mt-4">
+        <RolesCRUD mount={mount} path={`/auth/${mount}/role`} queryKey={['auth',mount,'k8s-roles']}
+          fields={[
+            {name:'name',label:'Role Name',required:true},
+            {name:'bound_service_account_names',label:'Bound SA Names (comma-sep or *)',placeholder:'*'},
+            {name:'bound_service_account_namespaces',label:'Bound SA Namespaces (comma-sep or *)',placeholder:'*'},
+            {name:'token_policies',label:'Policies (comma-sep)',placeholder:'default'},
+            {name:'token_ttl',label:'Token TTL',placeholder:'1h'},
+          ]} />
+      </TabsContent>
+    </Tabs>
+  );
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function AuthDetailPage() {
@@ -784,6 +1018,10 @@ export default function AuthDetailPage() {
     if (authType === 'approle') return <AppRoleAuth mount={mount} />;
     if (authType === 'token') return <TokenAuth />;
     if (authType === 'jwt' || authType === 'oidc') return <JWTAuth mount={mount} />;
+    if (authType === 'userpass') return <UserpassAuth mount={mount} />;
+    if (authType === 'ldap') return <LDAPAuth mount={mount} />;
+    if (authType === 'github') return <GitHubAuth mount={mount} />;
+    if (authType === 'kubernetes') return <KubernetesAuth mount={mount} />;
     return <GenericAuth mount={mount} type={authType} info={mountInfo as Record<string, unknown>} />;
   };
 

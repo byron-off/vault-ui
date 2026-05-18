@@ -23,6 +23,7 @@ import {
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Switch } from '@/components/ui/switch';
 
 import { vaultFetch } from '@/lib/vault/client';
 
@@ -683,6 +684,405 @@ function CredRow({ label, value }: { label: string; value: string }) {
   );
 }
 
+// ─── SSH ──────────────────────────────────────────────────────────────────────
+
+function SSHEngine({ mount }: { mount: string }) {
+  const qc = useQueryClient();
+  const [publicKey, setPublicKey] = useState('');
+  const [caGenerate, setCaGenerate] = useState(true);
+  const [caPrivKey, setCaPrivKey] = useState('');
+  const [caPubKey, setCaPubKey] = useState('');
+  const [signForm, setSignForm] = useState({ role: '', public_key: '', valid_principals: '', ttl: '' });
+  const [signResult, setSignResult] = useState('');
+  const [otpForm, setOtpForm] = useState({ role: '', ip: '', username: '' });
+  const [otpResult, setOtpResult] = useState<{ username?: string; ip?: string; key?: string } | null>(null);
+
+  const rolesQ = useQuery({ queryKey: ['engine', mount, 'roles'], queryFn: () => vaultFetch<{ data: { keys: string[] } }>(`/${mount}/roles`, { method: 'LIST' }).then(r => r.data.keys).catch(() => [] as string[]) });
+
+  useEffect(() => {
+    vaultFetch<string>(`/${mount}/public-key`).then(r => setPublicKey(typeof r === 'string' ? r : '')).catch(() => {});
+  }, [mount]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const configCaMutation = useMutation({
+    mutationFn: () => vaultFetch(`/${mount}/config/ca`, { method: 'POST', body: caGenerate ? { generate_signing_key: true } : { private_key: caPrivKey, public_key: caPubKey } }),
+    onSuccess: () => { toast.success('CA configured'); vaultFetch<string>(`/${mount}/public-key`).then(r => setPublicKey(typeof r === 'string' ? r : '')).catch(() => {}); },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  const signMutation = useMutation({
+    mutationFn: () => vaultFetch<{ data: { signed_key: string } }>(`/${mount}/sign/${signForm.role}`, { method: 'POST', body: { public_key: signForm.public_key, valid_principals: signForm.valid_principals || undefined, ttl: signForm.ttl || undefined } }),
+    onSuccess: (r) => { setSignResult(r.data.signed_key); toast.success('Key signed'); },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  const otpMutation = useMutation({
+    mutationFn: () => vaultFetch<{ data: { username?: string; ip?: string; key?: string } }>(`/${mount}/creds/${otpForm.role}`, { method: 'POST', body: { ip: otpForm.ip, username: otpForm.username || undefined } }),
+    onSuccess: (r) => { setOtpResult(r.data); toast.success('OTP generated'); },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  const roles = rolesQ.data ?? [];
+
+  return (
+    <Tabs defaultValue="ca">
+      <TabsList><TabsTrigger value="ca">CA Config</TabsTrigger><TabsTrigger value="roles">Roles</TabsTrigger><TabsTrigger value="sign">Sign Key</TabsTrigger><TabsTrigger value="otp">OTP Creds</TabsTrigger></TabsList>
+
+      <TabsContent value="ca" className="mt-4 space-y-4">
+        {publicKey && <Card><CardHeader><CardTitle className="text-sm">CA Public Key</CardTitle></CardHeader>
+          <CardContent><div className="flex items-start gap-2"><pre className="flex-1 text-xs font-mono bg-muted rounded p-3 overflow-auto max-h-32 whitespace-pre-wrap">{publicKey}</pre><CopyBtn text={publicKey} /></div></CardContent>
+        </Card>}
+        <Card><CardHeader><CardTitle className="text-sm">Configure CA</CardTitle></CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex items-center gap-2">
+              <Switch checked={caGenerate} onCheckedChange={setCaGenerate} id="ca-gen" />
+              <Label htmlFor="ca-gen">Auto-generate key pair</Label>
+            </div>
+            {!caGenerate && <>
+              <div className="space-y-1.5"><Label>Private Key (PEM)</Label><Textarea rows={4} className="font-mono text-xs" value={caPrivKey} onChange={e=>setCaPrivKey(e.target.value)} /></div>
+              <div className="space-y-1.5"><Label>Public Key (PEM)</Label><Textarea rows={4} className="font-mono text-xs" value={caPubKey} onChange={e=>setCaPubKey(e.target.value)} /></div>
+            </>}
+            <Button onClick={()=>configCaMutation.mutate()} disabled={configCaMutation.isPending}>Configure CA</Button>
+          </CardContent>
+        </Card>
+      </TabsContent>
+
+      <TabsContent value="roles" className="mt-4 space-y-4">
+        <div className="overflow-x-auto">
+          {rolesQ.isLoading ? <Skeleton className="h-24 w-full" /> : roles.length === 0
+            ? <p className="text-sm text-muted-foreground text-center py-8">No roles configured</p>
+            : <Table><TableHeader><TableRow><TableHead>Name</TableHead><TableHead className="w-20">Actions</TableHead></TableRow></TableHeader>
+                <TableBody>{roles.map(r => <TableRow key={r}><TableCell className="font-mono text-sm">{r}</TableCell>
+                  <TableCell><Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive" onClick={async()=>{await vaultFetch(`/${mount}/roles/${r}`,{method:'DELETE'});qc.invalidateQueries({queryKey:['engine',mount,'roles']});toast.success('Deleted');}}><Trash2 className="w-3.5 h-3.5"/></Button></TableCell>
+                </TableRow>)}</TableBody>
+              </Table>
+          }
+        </div>
+      </TabsContent>
+
+      <TabsContent value="sign" className="mt-4">
+        <Card><CardContent className="pt-6 space-y-4">
+          <p className="text-xs text-muted-foreground">For CA-mode SSH roles. Signs a user's public key.</p>
+          <div className="space-y-1.5"><Label>Role <span className="text-destructive">*</span></Label>
+            <Select value={signForm.role} onValueChange={v=>setSignForm(p=>({...p,role:v}))}><SelectTrigger><SelectValue placeholder="Select role"/></SelectTrigger>
+              <SelectContent>{roles.map(r=><SelectItem key={r} value={r}>{r}</SelectItem>)}</SelectContent></Select>
+          </div>
+          <div className="space-y-1.5"><Label>Public Key to Sign <span className="text-destructive">*</span></Label>
+            <Textarea rows={4} className="font-mono text-xs" placeholder="ssh-rsa AAAA..." value={signForm.public_key} onChange={e=>setSignForm(p=>({...p,public_key:e.target.value}))} />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5"><Label>Valid Principals</Label><Input placeholder="ubuntu,ec2-user" value={signForm.valid_principals} onChange={e=>setSignForm(p=>({...p,valid_principals:e.target.value}))} /></div>
+            <div className="space-y-1.5"><Label>TTL</Label><Input placeholder="1h" value={signForm.ttl} onChange={e=>setSignForm(p=>({...p,ttl:e.target.value}))} /></div>
+          </div>
+          <Button onClick={()=>signMutation.mutate()} disabled={!signForm.role||!signForm.public_key||signMutation.isPending}>Sign Key</Button>
+          {signResult && <div className="space-y-1"><div className="flex items-center gap-2"><Label>Signed Certificate</Label><CopyBtn text={signResult}/></div>
+            <pre className="text-xs font-mono bg-muted rounded p-3 overflow-auto max-h-40">{signResult}</pre>
+          </div>}
+        </CardContent></Card>
+      </TabsContent>
+
+      <TabsContent value="otp" className="mt-4">
+        <Card><CardContent className="pt-6 space-y-4">
+          <p className="text-xs text-muted-foreground">For OTP-mode SSH roles. Generates a one-time password.</p>
+          <div className="space-y-1.5"><Label>Role <span className="text-destructive">*</span></Label>
+            <Select value={otpForm.role} onValueChange={v=>setOtpForm(p=>({...p,role:v}))}><SelectTrigger><SelectValue placeholder="Select role"/></SelectTrigger>
+              <SelectContent>{roles.map(r=><SelectItem key={r} value={r}>{r}</SelectItem>)}</SelectContent></Select>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5"><Label>IP Address <span className="text-destructive">*</span></Label><Input placeholder="192.168.1.10" value={otpForm.ip} onChange={e=>setOtpForm(p=>({...p,ip:e.target.value}))} /></div>
+            <div className="space-y-1.5"><Label>Username</Label><Input placeholder="ubuntu" value={otpForm.username} onChange={e=>setOtpForm(p=>({...p,username:e.target.value}))} /></div>
+          </div>
+          <Button onClick={()=>otpMutation.mutate()} disabled={!otpForm.role||!otpForm.ip||otpMutation.isPending}>Generate OTP</Button>
+          {otpResult && <div className="space-y-2 p-3 bg-muted rounded-md">
+            {otpResult.key && <div className="flex items-center gap-2"><span className="text-xs text-muted-foreground w-20">OTP</span><code className="flex-1 font-mono text-sm">{otpResult.key}</code><CopyBtn text={otpResult.key}/></div>}
+            {otpResult.username && <div className="flex items-center gap-2"><span className="text-xs text-muted-foreground w-20">Username</span><code className="flex-1 font-mono text-sm">{otpResult.username}</code></div>}
+            {otpResult.ip && <div className="flex items-center gap-2"><span className="text-xs text-muted-foreground w-20">IP</span><code className="flex-1 font-mono text-sm">{otpResult.ip}</code></div>}
+          </div>}
+        </CardContent></Card>
+      </TabsContent>
+    </Tabs>
+  );
+}
+
+// ─── AWS ──────────────────────────────────────────────────────────────────────
+
+function AWSEngine({ mount }: { mount: string }) {
+  const qc = useQueryClient();
+  const [cfg, setCfg] = useState({ access_key: '', secret_key: '', region: '' });
+  const [selRole, setSelRole] = useState('');
+  const [creds, setCreds] = useState<Record<string, string> | null>(null);
+
+  const rolesQ = useQuery({ queryKey: ['engine', mount, 'roles'], queryFn: () => vaultFetch<{ data: { keys: string[] } }>(`/${mount}/roles`, { method: 'LIST' }).then(r => r.data.keys).catch(() => [] as string[]) });
+  const cfgQ = useQuery({ queryKey: ['engine', mount, 'config'], queryFn: () => vaultFetch<{ data: { access_key?: string; region?: string } }>(`/${mount}/config/root`).then(r => r.data).catch(() => ({} as { access_key?: string; region?: string })) });
+  useEffect(() => { if (cfgQ.data) setCfg(p => ({ ...p, access_key: cfgQ.data?.access_key ?? '', region: cfgQ.data?.region ?? '' })); }, [cfgQ.data]);
+
+  const saveCfg = useMutation({
+    mutationFn: () => vaultFetch(`/${mount}/config/root`, { method: 'POST', body: { access_key: cfg.access_key, secret_key: cfg.secret_key || undefined, region: cfg.region } }),
+    onSuccess: () => toast.success('Config saved'),
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  const genCreds = useMutation({
+    mutationFn: () => vaultFetch<{ data: Record<string, string> }>(`/${mount}/creds/${selRole}`),
+    onSuccess: (r) => { setCreds(r.data); toast.success('Credentials generated'); },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  return (
+    <Tabs defaultValue="config">
+      <TabsList><TabsTrigger value="config">Config</TabsTrigger><TabsTrigger value="roles">Roles</TabsTrigger><TabsTrigger value="credentials">Credentials</TabsTrigger></TabsList>
+      <TabsContent value="config" className="mt-4">
+        <Card><CardContent className="pt-6 space-y-4">
+          <div className="space-y-1.5"><Label>Access Key ID</Label><Input className="font-mono" value={cfg.access_key} onChange={e=>setCfg(p=>({...p,access_key:e.target.value}))} /></div>
+          <div className="space-y-1.5"><Label>Secret Access Key (blank = keep)</Label><Input type="password" className="font-mono" value={cfg.secret_key} onChange={e=>setCfg(p=>({...p,secret_key:e.target.value}))} /></div>
+          <div className="space-y-1.5"><Label>Region</Label><Input placeholder="us-east-1" value={cfg.region} onChange={e=>setCfg(p=>({...p,region:e.target.value}))} /></div>
+          <Button onClick={()=>saveCfg.mutate()} disabled={saveCfg.isPending}>Save Config</Button>
+        </CardContent></Card>
+      </TabsContent>
+      <TabsContent value="roles" className="mt-4 space-y-4">
+        {rolesQ.isLoading ? <Skeleton className="h-24 w-full" /> : (rolesQ.data ?? []).length === 0
+          ? <p className="text-sm text-muted-foreground text-center py-8">No roles configured</p>
+          : <div className="overflow-x-auto"><Table><TableHeader><TableRow><TableHead>Name</TableHead><TableHead className="w-20">Actions</TableHead></TableRow></TableHeader>
+              <TableBody>{(rolesQ.data ?? []).map(r=><TableRow key={r}><TableCell className="font-mono text-sm">{r}</TableCell>
+                <TableCell><Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive" onClick={async()=>{await vaultFetch(`/${mount}/roles/${r}`,{method:'DELETE'});qc.invalidateQueries({queryKey:['engine',mount,'roles']});toast.success('Deleted');}}><Trash2 className="w-3.5 h-3.5"/></Button></TableCell>
+              </TableRow>)}</TableBody>
+            </Table></div>
+        }
+      </TabsContent>
+      <TabsContent value="credentials" className="mt-4">
+        <Card><CardContent className="pt-6 space-y-4">
+          <div className="flex gap-2 items-end">
+            <div className="flex-1 space-y-1.5"><Label>Role</Label>
+              <Select value={selRole} onValueChange={v=>{setSelRole(v);setCreds(null);}}><SelectTrigger><SelectValue placeholder="Select a role"/></SelectTrigger>
+                <SelectContent>{(rolesQ.data??[]).map(r=><SelectItem key={r} value={r}>{r}</SelectItem>)}</SelectContent></Select>
+            </div>
+            <Button onClick={()=>genCreds.mutate()} disabled={!selRole||genCreds.isPending}>Generate</Button>
+          </div>
+          {creds && <div className="space-y-2 p-3 bg-muted rounded-md">
+            {Object.entries(creds).filter(([,v])=>v).map(([k,v])=>(
+              <div key={k} className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground w-28 shrink-0">{k}</span>
+                <code className="flex-1 text-xs font-mono break-all">{v}</code>
+                <CopyBtn text={v}/>
+              </div>
+            ))}
+          </div>}
+        </CardContent></Card>
+      </TabsContent>
+    </Tabs>
+  );
+}
+
+// ─── Azure ────────────────────────────────────────────────────────────────────
+
+function AzureEngine({ mount }: { mount: string }) {
+  const qc = useQueryClient();
+  const [cfg, setCfg] = useState({ subscription_id: '', tenant_id: '', client_id: '', client_secret: '' });
+  const [selRole, setSelRole] = useState('');
+  const [creds, setCreds] = useState<Record<string, string> | null>(null);
+
+  const rolesQ = useQuery({ queryKey: ['engine', mount, 'roles'], queryFn: () => vaultFetch<{ data: { keys: string[] } }>(`/${mount}/roles`, { method: 'LIST' }).then(r => r.data.keys).catch(() => [] as string[]) });
+  const cfgQ = useQuery({ queryKey: ['engine', mount, 'config'], queryFn: () => vaultFetch<{ data: Record<string, string> }>(`/${mount}/config`).then(r => r.data).catch(() => ({} as Record<string, string>)) });
+  useEffect(() => { if (cfgQ.data) setCfg(p => ({ ...p, subscription_id: cfgQ.data?.subscription_id ?? '', tenant_id: cfgQ.data?.tenant_id ?? '', client_id: cfgQ.data?.client_id ?? '' })); }, [cfgQ.data]);
+
+  const saveCfg = useMutation({
+    mutationFn: () => vaultFetch(`/${mount}/config`, { method: 'POST', body: { subscription_id: cfg.subscription_id, tenant_id: cfg.tenant_id, client_id: cfg.client_id, client_secret: cfg.client_secret || undefined } }),
+    onSuccess: () => toast.success('Config saved'),
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  const genCreds = useMutation({
+    mutationFn: () => vaultFetch<{ data: Record<string, string> }>(`/${mount}/creds/${selRole}`),
+    onSuccess: (r) => { setCreds(r.data); toast.success('Credentials generated'); },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  return (
+    <Tabs defaultValue="config">
+      <TabsList><TabsTrigger value="config">Config</TabsTrigger><TabsTrigger value="roles">Roles</TabsTrigger><TabsTrigger value="credentials">Credentials</TabsTrigger></TabsList>
+      <TabsContent value="config" className="mt-4">
+        <Card><CardContent className="pt-6 space-y-4">
+          {([['subscription_id','Subscription ID',''],['tenant_id','Tenant ID',''],['client_id','Client ID',''],['client_secret','Client Secret (blank = keep)','']] as [keyof typeof cfg,string,string][]).map(([k,label,ph])=>(
+            <div key={k} className="space-y-1.5"><Label>{label}</Label><Input placeholder={ph} type={k==='client_secret'?'password':'text'} className="font-mono text-sm" value={cfg[k]} onChange={e=>setCfg(p=>({...p,[k]:e.target.value}))} /></div>
+          ))}
+          <Button onClick={()=>saveCfg.mutate()} disabled={saveCfg.isPending}>Save Config</Button>
+        </CardContent></Card>
+      </TabsContent>
+      <TabsContent value="roles" className="mt-4 space-y-4">
+        {rolesQ.isLoading ? <Skeleton className="h-24 w-full" /> : (rolesQ.data ?? []).length === 0
+          ? <p className="text-sm text-muted-foreground text-center py-8">No roles configured</p>
+          : <div className="overflow-x-auto"><Table><TableHeader><TableRow><TableHead>Name</TableHead><TableHead className="w-20">Actions</TableHead></TableRow></TableHeader>
+              <TableBody>{(rolesQ.data ?? []).map(r=><TableRow key={r}><TableCell className="font-mono text-sm">{r}</TableCell>
+                <TableCell><Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive" onClick={async()=>{await vaultFetch(`/${mount}/roles/${r}`,{method:'DELETE'});qc.invalidateQueries({queryKey:['engine',mount,'roles']});toast.success('Deleted');}}><Trash2 className="w-3.5 h-3.5"/></Button></TableCell>
+              </TableRow>)}</TableBody>
+            </Table></div>
+        }
+      </TabsContent>
+      <TabsContent value="credentials" className="mt-4">
+        <Card><CardContent className="pt-6 space-y-4">
+          <div className="flex gap-2 items-end">
+            <div className="flex-1 space-y-1.5"><Label>Role</Label>
+              <Select value={selRole} onValueChange={v=>{setSelRole(v);setCreds(null);}}><SelectTrigger><SelectValue placeholder="Select a role"/></SelectTrigger>
+                <SelectContent>{(rolesQ.data??[]).map(r=><SelectItem key={r} value={r}>{r}</SelectItem>)}</SelectContent></Select>
+            </div>
+            <Button onClick={()=>genCreds.mutate()} disabled={!selRole||genCreds.isPending}>Generate</Button>
+          </div>
+          {creds && <div className="space-y-2 p-3 bg-muted rounded-md">
+            {Object.entries(creds).filter(([,v])=>v).map(([k,v])=>(
+              <div key={k} className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground w-28 shrink-0">{k}</span>
+                <code className="flex-1 text-xs font-mono break-all">{v}</code>
+                <CopyBtn text={v}/>
+              </div>
+            ))}
+          </div>}
+        </CardContent></Card>
+      </TabsContent>
+    </Tabs>
+  );
+}
+
+// ─── GCP ──────────────────────────────────────────────────────────────────────
+
+function GCPEngine({ mount }: { mount: string }) {
+  const qc = useQueryClient();
+  const [credentials, setCredentials] = useState('');
+  const [selRoleset, setSelRoleset] = useState('');
+  const [credType, setCredType] = useState<'token' | 'key'>('token');
+  const [gcpCreds, setGcpCreds] = useState<Record<string, string> | null>(null);
+
+  const rolesetsQ = useQuery({ queryKey: ['engine', mount, 'rolesets'], queryFn: () => vaultFetch<{ data: { keys: string[] } }>(`/${mount}/rolesets`, { method: 'LIST' }).then(r => r.data.keys).catch(() => [] as string[]) });
+
+  const saveCfg = useMutation({
+    mutationFn: () => vaultFetch(`/${mount}/config`, { method: 'POST', body: { credentials: credentials || undefined } }),
+    onSuccess: () => toast.success('Config saved'),
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  const genCreds = useMutation({
+    mutationFn: () => vaultFetch<{ data: Record<string, string> }>(`/${mount}/${credType}/${selRoleset}`, { method: credType === 'key' ? 'POST' : 'GET' }),
+    onSuccess: (r) => { setGcpCreds(r.data); toast.success('Credentials generated'); },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  return (
+    <Tabs defaultValue="config">
+      <TabsList><TabsTrigger value="config">Config</TabsTrigger><TabsTrigger value="rolesets">Rolesets</TabsTrigger><TabsTrigger value="credentials">Credentials</TabsTrigger></TabsList>
+      <TabsContent value="config" className="mt-4">
+        <Card><CardContent className="pt-6 space-y-4">
+          <div className="space-y-1.5"><Label>GCP Credentials JSON</Label>
+            <Textarea rows={6} className="font-mono text-xs" placeholder='{"type":"service_account",...}' value={credentials} onChange={e=>setCredentials(e.target.value)} />
+          </div>
+          <Button onClick={()=>saveCfg.mutate()} disabled={saveCfg.isPending}>Save Config</Button>
+        </CardContent></Card>
+      </TabsContent>
+      <TabsContent value="rolesets" className="mt-4 space-y-4">
+        {rolesetsQ.isLoading ? <Skeleton className="h-24 w-full" /> : (rolesetsQ.data ?? []).length === 0
+          ? <p className="text-sm text-muted-foreground text-center py-8">No rolesets configured</p>
+          : <div className="overflow-x-auto"><Table><TableHeader><TableRow><TableHead>Name</TableHead><TableHead className="w-20">Actions</TableHead></TableRow></TableHeader>
+              <TableBody>{(rolesetsQ.data ?? []).map(r=><TableRow key={r}><TableCell className="font-mono text-sm">{r}</TableCell>
+                <TableCell><Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive" onClick={async()=>{await vaultFetch(`/${mount}/roleset/${r}`,{method:'DELETE'});qc.invalidateQueries({queryKey:['engine',mount,'rolesets']});toast.success('Deleted');}}><Trash2 className="w-3.5 h-3.5"/></Button></TableCell>
+              </TableRow>)}</TableBody>
+            </Table></div>
+        }
+      </TabsContent>
+      <TabsContent value="credentials" className="mt-4">
+        <Card><CardContent className="pt-6 space-y-4">
+          <div className="flex gap-2 items-end">
+            <div className="flex-1 space-y-1.5"><Label>Roleset</Label>
+              <Select value={selRoleset} onValueChange={v=>{setSelRoleset(v);setGcpCreds(null);}}><SelectTrigger><SelectValue placeholder="Select a roleset"/></SelectTrigger>
+                <SelectContent>{(rolesetsQ.data??[]).map(r=><SelectItem key={r} value={r}>{r}</SelectItem>)}</SelectContent></Select>
+            </div>
+            <div className="space-y-1.5"><Label>Type</Label>
+              <Select value={credType} onValueChange={v=>setCredType(v as 'token'|'key')}><SelectTrigger className="w-32"><SelectValue/></SelectTrigger>
+                <SelectContent><SelectItem value="token">Access Token</SelectItem><SelectItem value="key">Service Account Key</SelectItem></SelectContent></Select>
+            </div>
+            <Button onClick={()=>genCreds.mutate()} disabled={!selRoleset||genCreds.isPending}>Generate</Button>
+          </div>
+          {gcpCreds && <div className="space-y-2 p-3 bg-muted rounded-md">
+            {Object.entries(gcpCreds).filter(([,v])=>v).map(([k,v])=>(
+              <div key={k} className="flex items-start gap-2">
+                <span className="text-xs text-muted-foreground w-28 shrink-0 pt-0.5">{k}</span>
+                <code className="flex-1 text-xs font-mono break-all">{String(v)}</code>
+                <CopyBtn text={String(v)}/>
+              </div>
+            ))}
+          </div>}
+        </CardContent></Card>
+      </TabsContent>
+    </Tabs>
+  );
+}
+
+// ─── Consul ───────────────────────────────────────────────────────────────────
+
+function ConsulEngine({ mount }: { mount: string }) {
+  const qc = useQueryClient();
+  const [cfg, setCfg] = useState({ address: '', token: '', scheme: 'https' });
+  const [selRole, setSelRole] = useState('');
+  const [creds, setCreds] = useState<{ token?: string } | null>(null);
+
+  const rolesQ = useQuery({ queryKey: ['engine', mount, 'roles'], queryFn: () => vaultFetch<{ data: { keys: string[] } }>(`/${mount}/roles`, { method: 'LIST' }).then(r => r.data.keys).catch(() => [] as string[]) });
+  const cfgQ = useQuery({ queryKey: ['engine', mount, 'config'], queryFn: () => vaultFetch<{ data: { address?: string; scheme?: string } }>(`/${mount}/config/access`).then(r => r.data).catch(() => ({} as { address?: string; scheme?: string })) });
+  useEffect(() => { if (cfgQ.data) setCfg(p => ({ ...p, address: cfgQ.data?.address ?? '', scheme: cfgQ.data?.scheme ?? 'https' })); }, [cfgQ.data]);
+
+  const saveCfg = useMutation({
+    mutationFn: () => vaultFetch(`/${mount}/config/access`, { method: 'POST', body: { address: cfg.address, token: cfg.token || undefined, scheme: cfg.scheme } }),
+    onSuccess: () => toast.success('Config saved'),
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  const genCreds = useMutation({
+    mutationFn: () => vaultFetch<{ data: { token?: string } }>(`/${mount}/creds/${selRole}`),
+    onSuccess: (r) => { setCreds(r.data); toast.success('Token generated'); },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  return (
+    <Tabs defaultValue="config">
+      <TabsList><TabsTrigger value="config">Config</TabsTrigger><TabsTrigger value="roles">Roles</TabsTrigger><TabsTrigger value="credentials">Credentials</TabsTrigger></TabsList>
+      <TabsContent value="config" className="mt-4">
+        <Card><CardContent className="pt-6 space-y-4">
+          <div className="space-y-1.5"><Label>Consul Address</Label><Input placeholder="127.0.0.1:8500" value={cfg.address} onChange={e=>setCfg(p=>({...p,address:e.target.value}))} /></div>
+          <div className="space-y-1.5"><Label>Scheme</Label>
+            <Select value={cfg.scheme} onValueChange={v=>setCfg(p=>({...p,scheme:v}))}><SelectTrigger><SelectValue/></SelectTrigger>
+              <SelectContent><SelectItem value="https">HTTPS</SelectItem><SelectItem value="http">HTTP</SelectItem></SelectContent></Select>
+          </div>
+          <div className="space-y-1.5"><Label>Management Token (blank = keep)</Label><Input type="password" className="font-mono" value={cfg.token} onChange={e=>setCfg(p=>({...p,token:e.target.value}))} /></div>
+          <Button onClick={()=>saveCfg.mutate()} disabled={saveCfg.isPending}>Save Config</Button>
+        </CardContent></Card>
+      </TabsContent>
+      <TabsContent value="roles" className="mt-4 space-y-4">
+        {rolesQ.isLoading ? <Skeleton className="h-24 w-full" /> : (rolesQ.data ?? []).length === 0
+          ? <p className="text-sm text-muted-foreground text-center py-8">No roles configured</p>
+          : <div className="overflow-x-auto"><Table><TableHeader><TableRow><TableHead>Name</TableHead><TableHead className="w-20">Actions</TableHead></TableRow></TableHeader>
+              <TableBody>{(rolesQ.data ?? []).map(r=><TableRow key={r}><TableCell className="font-mono text-sm">{r}</TableCell>
+                <TableCell><Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive" onClick={async()=>{await vaultFetch(`/${mount}/roles/${r}`,{method:'DELETE'});qc.invalidateQueries({queryKey:['engine',mount,'roles']});toast.success('Deleted');}}><Trash2 className="w-3.5 h-3.5"/></Button></TableCell>
+              </TableRow>)}</TableBody>
+            </Table></div>
+        }
+      </TabsContent>
+      <TabsContent value="credentials" className="mt-4">
+        <Card><CardContent className="pt-6 space-y-4">
+          <div className="flex gap-2 items-end">
+            <div className="flex-1 space-y-1.5"><Label>Role</Label>
+              <Select value={selRole} onValueChange={v=>{setSelRole(v);setCreds(null);}}><SelectTrigger><SelectValue placeholder="Select a role"/></SelectTrigger>
+                <SelectContent>{(rolesQ.data??[]).map(r=><SelectItem key={r} value={r}>{r}</SelectItem>)}</SelectContent></Select>
+            </div>
+            <Button onClick={()=>genCreds.mutate()} disabled={!selRole||genCreds.isPending}>Generate Token</Button>
+          </div>
+          {creds?.token && <div className="space-y-1 p-3 bg-muted rounded-md">
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-muted-foreground w-20">Token</span>
+              <code className="flex-1 text-xs font-mono break-all">{creds.token}</code>
+              <CopyBtn text={creds.token}/>
+            </div>
+          </div>}
+        </CardContent></Card>
+      </TabsContent>
+    </Tabs>
+  );
+}
+
 // ─── Generic fallback ─────────────────────────────────────────────────────────
 
 function GenericEngine({ mount }: { mount: string }) {
@@ -745,6 +1145,11 @@ export default function EngineDetailPage() {
     if (engineType === 'transit') return <TransitEngine mount={mount} />;
     if (engineType === 'totp') return <TOTPEngine mount={mount} />;
     if (engineType === 'database') return <DatabaseEngine mount={mount} />;
+    if (engineType === 'ssh') return <SSHEngine mount={mount} />;
+    if (engineType === 'aws') return <AWSEngine mount={mount} />;
+    if (engineType === 'azure') return <AzureEngine mount={mount} />;
+    if (engineType === 'gcp') return <GCPEngine mount={mount} />;
+    if (engineType === 'consul') return <ConsulEngine mount={mount} />;
     return <GenericEngine mount={mount} />;
   };
 

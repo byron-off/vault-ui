@@ -6,6 +6,7 @@ import { Sidebar } from '@/components/layout/sidebar';
 import { Header } from '@/components/layout/header';
 import { useConnectionStore } from '@/lib/store';
 import { useTokenRenewal } from '@/hooks/use-token-renewal';
+import { ErrorBoundary } from '@/components/error-boundary';
 
 export default function ShellLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -25,7 +26,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
     <div className="min-h-screen">
       <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
       <Header onMenuClick={() => setSidebarOpen((v) => !v)} />
-      <main className="md:ml-[220px] mt-12 p-4 md:p-8 max-w-[1280px]">{children}</main>
+      <main className="md:ml-[220px] mt-12 p-4 md:p-8 max-w-[1280px]"><ErrorBoundary>{children}</ErrorBoundary></main>
     </div>
   );
 }
